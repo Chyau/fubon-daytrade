@@ -1,0 +1,67 @@
+https://yuanganai.github.io/vic-stock-report/
+
+
+Microsoft Windows [版本 10.0.26300.9818]
+(c) Microsoft Corporation. 著作權所有，並保留一切權利。
+
+C:\Users\Chyau>gh auth login
+? Where do you use GitHub? GitHub.com
+! Did you know that expiring tokens can be requested with --expiring? Read more at https://gh.io/gh-expiring-tokens
+? How would you like to authenticate GitHub CLI? Login with a web browser
+? What is your preferred protocol for Git operations on this host? HTTPS
+? Authenticate Git with your GitHub credentials? Yes
+
+! One-time code (7605-97EA) copied to clipboard
+Press Enter to open https://github.com/login/device in your browser... 7605-97EA
+✓ Authentication complete.
+- gh config set -h github.com git_protocol https
+✓ Configured git protocol
+✓ Logged in as Chyau
+
+C:\Users\Chyau>
+
+
+
+
+執行：
+
+gh auth login
+依序選擇：
+
+GitHub.com
+HTTPS
+Yes（authenticate Git with your GitHub credentials）
+Login with a web browser
+畫面會顯示一組一次性代碼（如 XXXX-XXXX）— 按 Enter 開瀏覽器 → 貼上代碼 → 授權
+完成後告訴我，我接手執行：
+gh repo create fubon-daytrade --private --source . --push
+
+https://chyau.github.io/fubon-daytrade 
+
+repo 設 public + Pages	免費	策略程式碼＋trades.db 全部公開
+免費解法：自己加「真加密鎖」（StatiCrypt 模式）— 管線在推送前用 AES-256 把 index.html 加密，
+訪客必須輸入密碼才能解密觀看。這是真加密（不是做樣子的擋板），可同時用在 Pages 和 Vercel，
+密碼由您自訂（存 GitHub Secrets＋本機 .env）。
+
+https://fubon-daytrade-snapshot.vercel.app/
+
+步驟 1：把 repo 改成 Public
+開 https://github.com/Chyau/fubon-daytrade/settings
+捲到最下面 Danger Zone → Change repository visibility → Change to public
+確認框輸入 Chyau/fubon-daytrade → 確認
+步驟 2：啟用 Pages
+同一設定區左側選單 → Pages
+Build and deployment → Source 選 Deploy from a branch
+Branch 選 main｜Folder 選 /docs → Save
+等 1–2 分鐘（Actions 分頁會跑一個 pages-build-deployment）→ 開 https://chyau.github.io/fubon-daytrade/（Ctrl+F5）
+docs/index.html 我已經預放並由管線自動更新 — 部署完成網址立即有內容。
+
+
+日常節奏（兩條命令，無排程）
+盤前一晚（例如週日晚上）：
+  ① 跑您的 query_longshort.py          ← 更新您的 DB（您的工具）
+  ② python tools\paper_step.py --push  ← 一條命令完成：
+       刷新承諾檔 → 重放（舊資料全部 is_dup 不重複計）→ 快照 → 推送雲端
+       （雲端 Actions 週一開盤就用這份新清單）
+
+週一盤中：完全不用管，Actions 每 15 分鐘自己跑

@@ -4,8 +4,9 @@ echo === Export read-only snapshot ===
 python tools\export_snapshot.py %*
 python tools\lock_snapshot.py snapshot\index.html docs\index.html
 python longshort.py >nul 2>&1
+python tools\export_chips.py >nul 2>&1
 if errorlevel 1 goto :fail
-git add -f data\longshort_symbols.json
+git add -f data\longshort_symbols.json data\chips_export.json
 git add snapshot
 git commit -q -m "Update read-only snapshot" --only snapshot
 if errorlevel 1 echo (No snapshot changes to commit)

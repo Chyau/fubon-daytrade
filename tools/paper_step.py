@@ -146,7 +146,7 @@ def main():
                                   capture_output=True, text=True, check=check)
         git("add", "-f", "data/trades.db")
         git("add", "snapshot/index.html", "docs/index.html",
-            "data/longshort_symbols.json")
+            "data/longshort_symbols.json", "data/chips_export.json")
         r = git("commit", "-m", f"paper step {ts}", check=False)
         if r.returncode == 0:
             git("pull", "--rebase", "--autostash", check=False)
