@@ -37,6 +37,7 @@ log = get_logger("web")
 app = Flask(__name__)
 
 PORT = 9757
+HOST = os.environ.get("HOST", "127.0.0.1")  # VPS 部署設 HOST=0.0.0.0（搭配雲端防火牆／Tailscale，勿裸露公網）
 
 # ==================== 樣式與版型 ====================
 CSS = """
@@ -655,4 +656,4 @@ if __name__ == "__main__":
     except Exception as _e:
         log.warning(f"啟動自癒略過：{_e}")
     log.info(f"啟動 Web 儀表板：http://127.0.0.1:{PORT}")
-    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+    app.run(host=HOST, port=PORT, debug=False, threaded=True)

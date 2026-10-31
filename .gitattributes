@@ -1,0 +1,7 @@
+# 行尾一致性（跨平台部署）
+*.sh text eol=lf
+*.bat text eol=crlf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.html text eol=lf
