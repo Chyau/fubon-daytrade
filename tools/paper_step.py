@@ -156,16 +156,23 @@ def main():
         def git(*args, check=True):
             return subprocess.run(["git", *args], cwd=BASE,
                                   capture_output=True, text=True, check=check)
-        git("add", "-f", "data/trades.db")
-        git("add", "snapshot/index.html", "docs/index.html",
-            "data/longshort_symbols.json", "data/chips_export.json")
-        r = git("commit", "-m", f"paper step {ts}", check=False)
-        if r.returncode == 0:
-            git("pull", "--rebase", "--autostash", check=False)
-            git("push")
-            log.info("✓ 已推送（Vercel/Pages 自動部署）")
-        else:
-            log.info("（無變更，不推送）")
+        try:
+            git("add", "-f", "data/trades.db", "data/longshort_symbols.json",
+                "data/chips_export.json")
+            git("add", "-f", "snapshot/index.html", "docs/index.html",
+                "snapshot/chips.json", "docs/chips.json")
+            r = git("commit", "-m", f"paper step {ts}", check=False)
+            if r.returncode == 0:
+                git("pull", "--rebase", "--autostash", check=False)
+                git("push")
+                log.info("✓ 已推送（Vercel/Pages 自動部署）")
+            else:
+                log.info("（無變更，不推送）")
+        except subprocess.CalledProcessError as e:
+            log.error(f"git 失敗：{e.cmd}")
+            log.error(f"git stderr：{(e.stderr or '')[:500]}")
+            log.error(f"git stdout：{(e.stdout or '')[:300]}")
+            raise
     return 0
 
 
