@@ -2,6 +2,7 @@
 pushd "%~dp0"
 echo === Export read-only snapshot ===
 python tools\export_snapshot.py %*
+python tools\lock_snapshot.py snapshot\index.html docs\index.html
 if errorlevel 1 goto :fail
 git add snapshot
 git commit -q -m "Update read-only snapshot" --only snapshot

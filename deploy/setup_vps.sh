@@ -43,20 +43,28 @@ python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip -q
 ./.venv/bin/pip install -r requirements.txt -q
 
-echo "=== [4/7] 安裝富邦 SDK Linux 版 v${SDK_VER} ==="
-ARCH=$(uname -m)
-case "$ARCH" in
-  x86_64)  SDK_URL="$SDK_X86" ;;
-  aarch64) SDK_URL="$SDK_ARM" ;;
-  *) echo "不支援的架構：$ARCH"; exit 1 ;;
-esac
-TMP=$(mktemp -d)
-curl -sL "$SDK_URL" -o "$TMP/sdk.zip"
-unzip -oq "$TMP/sdk.zip" -d "$TMP/sdk"
-./.venv/bin/pip install "$TMP"/sdk/*.whl -q
-./.venv/bin/python -c "import fubon_neo; print('  ✓ fubon_neo', fubon_neo.__version__ if hasattr(fubon_neo,'__version__') else 'OK')"
+echo "=== [4/7] 行情來源 ==="
+if [ "${YF_ONLY:-0}" = "1" ]; then
+  echo "  YF_ONLY 模式：純 yfinance 行情（延遲 15–20 分，模擬績效觀測用），略過富邦 SDK"
+else
+  echo "  安裝富邦 SDK Linux 版 v${SDK_VER}..."
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64)  SDK_URL="$SDK_X86" ;;
+    aarch64) SDK_URL="$SDK_ARM" ;;
+    *) echo "不支援的架構：$ARCH"; exit 1 ;;
+  esac
+  TMP=$(mktemp -d)
+  curl -sL "$SDK_URL" -o "$TMP/sdk.zip"
+  unzip -oq "$TMP/sdk.zip" -d "$TMP/sdk"
+  ./.venv/bin/pip install "$TMP"/sdk/*.whl -q
+  ./.venv/bin/python -c "import fubon_neo; print('  ✓ fubon_neo', fubon_neo.__version__ if hasattr(fubon_neo,'__version__') else 'OK')"
+fi
 
 echo "=== [5/7] 測試環境沙箱憑證（富邦官方公開樣本）==="
+if [ "${YF_ONLY:-0}" = "1" ]; then
+  echo "  YF_ONLY 模式：略過憑證"
+else
 mkdir -p test_environment
 if [ ! -f test_environment/58581758.pfx ]; then
   curl -sL "$TEST_ENV_ZIP" -o "$TMP/tenv.zip"

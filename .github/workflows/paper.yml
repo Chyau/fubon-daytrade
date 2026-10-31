@@ -1,0 +1,45 @@
+name: paper-intraday
+
+# 模擬下單：yfinance 5 分K 重放（與富邦引擎相同參數）
+# 台灣時段 09:00–13:30 → UTC 01:00–05:30（yf 延遲 ~20 分，最後 13:50 收尾補抓）
+# 狀態：data/trades.db 直接 commit 回 repo（每次重放 is_dup 去重，單寫入者）
+
+on:
+  schedule:
+    - cron: "*/15 1-5 * * 1-5"   # 台灣 09:15–13:45 每 15 分鐘
+    - cron: "50 5 * * 1-5"       # 台灣 13:50 收盤收尾（補抓延遲的最後 K 棒）
+  workflow_dispatch: {}          # 手動觸發（在家測試用）
+
+permissions:
+  contents: write
+
+concurrency:
+  group: paper
+  cancel-in-progress: false
+
+jobs:
+  step:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Paper step（重放＋去重＋快照＋推送）
+        run: python tools/paper_step.py --push
+        env:
+          SNAPSHOT_PASSWORD: ${{ secrets.SNAPSHOT_PASSWORD }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### 模擬下單步驟完成" >> $GITHUB_STEP_SUMMARY
+          echo "- 時間：$(TZ=Asia/Taipei date '+%F %T')" >> $GITHUB_STEP_SUMMARY
+          echo "- 快照：<https://fubon-daytrade-snapshot.vercel.app/>" >> $GITHUB_STEP_SUMMARY
