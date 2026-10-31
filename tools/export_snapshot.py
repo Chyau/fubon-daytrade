@@ -256,10 +256,18 @@ function trFilter(){
 
 /* ── 自動執行（LIVE + PAPER）──────────────────── */
 function renderAu(){
-  const auto=D.runs.filter(r=>r.kind==='live'||r.kind==='paper');
-  if(!auto.length){$('au').innerHTML='<div class="card muted">尚無自動執行（LIVE／PAPER）交易 — 週一盤中 Actions 開跑後出現</div>';return;}
-  const badge=k=>`<span class="badge b-${k}">${k==='live'?'⚡本機引擎':'🤖模擬重放'}</span>`;
-  let html=`<div class="krow" style="margin-bottom:14px">`+auto.map(r=>
+  let auto=D.runs.filter(r=>r.kind==='live'||r.kind==='paper');
+  let fallback=false;
+  if(!auto.length){
+    auto=D.runs.slice(0,3);   // 尚無 LIVE/PAPER → 預覽最近的模擬 run
+    fallback=true;
+  }
+  const note=fallback
+    ?'<div class="card muted">ℹ️ 以下為最近回測 run 的預覽（週一盤中 Actions 開跑後，此分頁將改顯示每 15 分鐘累積的模擬交易 PAPER-YYYYMMDD）</div>'
+    :'';
+  if(!auto.length){$('au').innerHTML=note+'<div class="card muted">尚無任何 run</div>';return;}
+  const badge=k=>`<span class="badge b-${k}">${k==='live'?'⚡本機引擎':k==='paper'?'🤖模擬重放':'⏱回測'}</span>`;
+  let html=note+`<div class="krow" style="margin-bottom:14px">`+auto.map(r=>
     `<span class="kbd" onclick="auPick('${r.id}')">${badge(r.kind)} ${esc(r.id)}｜${r.n} 筆 ${sgn(Math.round(r.total))}${fmt(Math.round(r.total))}</span>`).join('')+`</div>
   <div id="au-d"></div><div class="card" style="margin-top:12px"><h2>交易明細</h2>
   <div class="tbl-wrap"><table>${TR_HEAD}<tbody id="au-tr"></tbody></table></div></div>`;
