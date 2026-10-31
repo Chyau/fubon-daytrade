@@ -1,0 +1,53 @@
+① 2426 逐字稿案例重放 ✅（上輪完成）
+進場 72.1 → 停損 73.2→72.1→71.2→70.4→69.8 → 13:20 出場 67.3 → 淨利 +4,632 元（與逐字稿分毫不差）
+
+② 長黑K參數網格校準 ✅ --sweep
+python backtest.py --fubon 2330 --sweep    # 25 組組合（body_mult × min_body_pct）
+輸出各組合筆數／勝率／淨損益／獲利因子／平均R（淨模擬不入庫）＋過擬合警告。已實測運行。
+
+③ Telegram 通知 ✅ notify.py
+.env 填入 TELEGRAM_BOT_TOKEN／TELEGRAM_CHAT_ID 即自動通知：⚡引擎進場/出場/擋單事件、真實下單結果（成功/失敗）、回測完成摘要。未填＝靜默關閉（已驗證）。
+
+④ 條件單串接 ✅ fubon_condition.py（官方 API 精確簽名）
+python fubon_condition.py --list                                   # 查有效條件單 ✓ 實測
+python fubon_condition.py --stop 2330 --qty 1000 --trigger 2380.0  # 停損買回保護 ✓ 實測
+python fubon_condition.py --entry 2330 --qty 1000 --trigger 2400 --side sell   # 進場＋13:20自動回補
+python fubon_condition.py --cancel GUID                            # 取消 ✓
+實測發現並已處理：當日效期條件單限營業日 08:30–16:32 送出（券商業務規則，訊息已直接顯示於 CLI）；StopSign 等類別匯入路徑已修正。 引擎雙保險：設 LIVE_AUTO_CONDITION=1 → test 模式進場時自動掛停損條件單（引擎掛掉也有保護）。
+
+⑤ --from-pit 證據鏈建規則 ✅
+python journal.py pits --min-n 4 --save     # 挖掘入庫
+python journal.py rules --from-pit 1        # 實測成功：規則 #2 帶證據「n=6 虧損率100% vs 基準54%，avgR=-1.05」
+結果歸因維度自動拒絕（事後偏誤防護）＋仍需人工核准。
+
+⑥ 手冊已更新 ✅
+docs/操作手冊.md 新增「7.1 進階功能」（sweep／from-pit／Telegram／條件單），網頁 📖 手冊同步。
+
+🧪 最終驗證
+全模組編譯 ✓｜9 個網頁全部 200 ✓｜條件單真實憑證呼叫 ✓｜from-pit 證據鏈 ✓｜sweep 25 組 ✓
+📁 完整系統（13 模組）
+fubon-daytrade/
+├── app.py            Web 儀表板（9 頁，:9757）     ├── strategy.py   四階段引擎
+├── live.py           自動執行＋Telegram＋條件單     ├── backtest.py   回測/績效/sweep
+├── journal.py        學習迴路＋from-pit            ├── chips.py      籌碼＋盤前清單
+├── fubon_orders.py   下單 CLI＋行情＋.env           ├── fubon_condition.py  條件單 ⭐
+├── notify.py         Telegram ⭐                   ├── db.py（8表）/ logutil.py
+├── docs/操作手冊.md  ⭐                            └── start_web.bat / .env.example
+佛系當沖量化系統現為完整版：盤前選股 → 盤中自動執行（dry/test＋雙保險條件單）→ 交易紀錄 → 學習迴路（證據鏈規則）→ 通知與手冊，全部閉環。
+
+📋 執行程式與時間表（您自行安排，系統不註冊排程）
+執行時間	程式	用途
+每個交易日 17:30（掃描器 17:00／chengwaye 17:05／籌碼日報更新後）	雙擊 daily_update.bat
+或 python tools\daily_update.py	DB 備份 → 籌碼快取刷新 → 掃描器清單重抓 → 明日觀察清單 → 回測累積（自動去重） → Telegram 摘要
+每週一次（週末）	python journal.py pits --min-n 4 --save
+→ 審查 ⛔ 坑點 → rules --from-pit <ID> → --approve	證據審查 → 建規則 → 核准
+隨時	python tools\analyze_candle_anatomy.py --n 30	長黑K影線/量能/型態 vs 盈虧關聯分析
+開機後（網頁＋引擎）	start_web_forever.bat	儀表板＋⚡自動執行
+日後若想自動化（您自行決定，一行指令）：
+
+schtasks /Create /TN "FubonDaytradeDaily" /SC DAILY /ST 17:30 /TR "cmd /c C:\Users\Chyau\Documents\預設專案\fubon-daytrade\daily_update.bat"
+累積進度追蹤（學習迴路養分）
+目前總計 182 筆（目標 300 筆 ≈ 10 個交易日）
+每日增量來源：daily_update.bat 的「每日回測累積」步驟（自動去重）
+每週檢查：journal.py pits 看證據變化（量能比/型態維度已生效）
+⏱ 建議明天（週一）17:30 執行第一次「真實新交易日」的 daily_update.bat，驗證新資料自動入庫；同時 08:30–16:32 間可測試條件單下單。

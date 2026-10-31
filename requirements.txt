@@ -1,0 +1,10 @@
+# 佛系當沖量化系統 — 相依套件
+# 安裝：pip install -r requirements.txt
+#
+# ⚠ 富邦 Neo SDK（fubon_neo）不在 PyPI — 需從官方下載 .whl 安裝：
+#   https://www.fbs.com.tw/TradeAPI/docs/download/download-sdk
+#   pip install <下載的檔名>.whl
+# （僅下單／富邦行情功能需要；儀表板瀏覽、CSV／yfinance 回測可不裝）
+
+flask>=3.0
+yfinance>=0.2.40
