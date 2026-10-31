@@ -145,7 +145,8 @@ def main():
             return subprocess.run(["git", *args], cwd=BASE,
                                   capture_output=True, text=True, check=check)
         git("add", "-f", "data/trades.db")
-        git("add", "snapshot/index.html", "docs/index.html")
+        git("add", "snapshot/index.html", "docs/index.html",
+            "data/longshort_symbols.json")
         r = git("commit", "-m", f"paper step {ts}", check=False)
         if r.returncode == 0:
             git("pull", "--rebase", "--autostash", check=False)
