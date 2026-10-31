@@ -8,7 +8,20 @@ on:
   schedule:
     - cron: "*/15 1-5 * * 1-5"   # 台灣 09:15–13:45 每 15 分鐘
     - cron: "50 5 * * 1-5"       # 台灣 13:50 收盤收尾（補抓延遲的最後 K 棒）
-  workflow_dispatch: {}          # 手動觸發（在家測試用）
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "自訂標的（逗號分隔，如 2330,2426；留空 = 多空 24 檔重放）"
+        required: false
+        default: ""
+      period:
+        description: "yfinance 期數（5d/10d/1mo/60d）"
+        required: false
+        default: "5d"
+      risk_budget:
+        description: "單筆風險預算（元，0 = 固定 1 張）"
+        required: false
+        default: "0"
 
 permissions:
   contents: write
@@ -38,7 +51,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Paper step（重放＋去重＋快照＋推送）
-        run: python tools/paper_step.py --push
+        run: >
+          python tools/paper_step.py --push
+          --period "${{ inputs.period || '5d' }}"
+          --symbols "${{ inputs.symbols }}"
+          --risk-budget "${{ inputs.risk_budget || '0' }}"
         env:
           SNAPSHOT_PASSWORD: ${{ secrets.SNAPSHOT_PASSWORD }}
 

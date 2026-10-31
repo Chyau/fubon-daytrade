@@ -78,18 +78,30 @@ def main():
     ap = argparse.ArgumentParser(description="yfinance 模擬下單單步（重放＋去重＋快照）")
     ap.add_argument("--push", action="store_true", help="提交 trades.db＋快照到 GitHub")
     ap.add_argument("--period", default="5d", help="yfinance 抓取期數（預設 5d）")
+    ap.add_argument("--symbols", default="",
+                    help="自訂標的（逗號分隔；留空 = 多空清單 24 檔）")
+    ap.add_argument("--risk-budget", type=float, default=0.0,
+                    help="單筆風險預算（0 = 固定 1 張）")
     a = ap.parse_args()
 
-    log = get_logger("paper")
-    _, syms_str = longshort.short_symbols()
-    syms = [s for s in syms_str.split(",") if s]
+    if a.symbols.strip():
+        syms = [s.strip().upper().replace(".TW", "").replace(".TWO", "")
+                for s in a.symbols.replace("，", ",").split(",") if s.strip()]
+        run_kind = "BT"
+    else:
+        _, syms_str = longshort.short_symbols()
+        syms = [s for s in syms_str.split(",") if s]
+        run_kind = "PAPER"
     if not syms:
-        log.error("多空清單為空 — 檢查 longshort.py 的 DB 路徑")
+        log = get_logger("paper")
+        log.error("標的清單為空 — 檢查 longshort 承諾檔或 --symbols 參數")
         return 1
 
-    # 下單參數與富邦引擎完全相同（DEFAULTS），固定 1 張（risk_budget=0）
-    cfg = {**strategy.DEFAULTS, "risk_budget": 0}
-    run_id = f"PAPER-{datetime.now():%Y%m%d}"
+    # 下單參數與富邦引擎完全相同（DEFAULTS）；risk_budget=0 → 固定 1 張
+    cfg = {**strategy.DEFAULTS, "risk_budget": a.risk_budget}
+    run_id = (f"{run_kind}-{datetime.now():%Y%m%d}" if run_kind == "PAPER"
+              else f"BT-{datetime.now():%Y%m%d-%H%M}")
+    log = get_logger("paper")
 
     log.info(f"批次下載 {len(syms)} 檔（{a.period} 5 分K）...")
     data = batch_fetch(syms, a.period, log)
