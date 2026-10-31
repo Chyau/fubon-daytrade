@@ -19,15 +19,20 @@ concurrency:
 
 jobs:
   step:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Git identity（commit 需要）
+        run: |
+          git config user.name "paper-bot"
+          git config user.email "actions@users.noreply.github.com"
 
       - name: Install deps
         run: pip install -r requirements.txt

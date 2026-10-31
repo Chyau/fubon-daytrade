@@ -11,49 +11,77 @@
 import json
 import os
 import sqlite3
+from pathlib import Path
 
 DEFAULT_DB = r"D:\權證小哥-當沖飆股神手\twdata\tw_stock.db"
 SHORT_LABELS = ("做空", "偏空")
+FALLBACK = Path(__file__).resolve().parent / "data" / "longshort_symbols.json"
 
 
 def _db_path():
     return os.environ.get("LONGSHORT_DB", DEFAULT_DB)
 
 
+def _save_fallback(date, rows):
+    """本機有 DB 時，把清單快照進 repo（雲端 Actions 讀取此檔後備）"""
+    try:
+        FALLBACK.parent.mkdir(exist_ok=True)
+        compact = [{"stock_no": r["stock_no"], "bias_label": r["bias_label"],
+                    "bias_score": r["bias_score"], "close": r.get("close"),
+                    "tags": r.get("tags", [])} for r in rows]
+        FALLBACK.write_text(json.dumps({"date": date, "symbols": compact},
+                                       ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_fallback():
+    try:
+        d = json.loads(FALLBACK.read_text(encoding="utf-8"))
+        rows = d.get("symbols") or []
+        for r in rows:
+            r.setdefault("tags", [])
+        return d.get("date"), rows
+    except Exception:
+        return None, []
+
+
 def load_longshort(date=None, labels=SHORT_LABELS, db_path=None):
     """回傳 (基準日 'YYYY/MM/DD' 或 None, [ {stock_no, bias_label, bias_score, tags, close} ])
 
     排序：做空排偏空前；同組內 bias_score 越低（越空）越前。
-    DB 不存在或查無資料 → (None, [])（呼叫端自行後備，不拋錯）。
+    本機 DB 可用 → 讀 DB 並同步承諾檔；不可用（如 Linux Actions）→ 讀承諾檔。
+    兩者皆無 → (None, [])（呼叫端自行後備，不拋錯）。
     """
     path = db_path or _db_path()
-    if not os.path.exists(path):
-        return None, []
-    try:
-        con = sqlite3.connect(path)
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
-        if not date:
-            row = cur.execute("SELECT MAX(date) FROM longshort_signal").fetchone()
-            date = row[0] if row and row[0] else None
-        if not date:
+    rows = []
+    if os.path.exists(path):
+        try:
+            con = sqlite3.connect(path)
+            con.row_factory = sqlite3.Row
+            cur = con.cursor()
+            if not date:
+                row = cur.execute("SELECT MAX(date) FROM longshort_signal").fetchone()
+                date = row[0] if row and row[0] else None
+            if date:
+                q = ("SELECT stock_no, bias_label, bias_score, tags_json, close "
+                     "FROM longshort_signal WHERE date=? AND bias_label IN (%s)"
+                     % ",".join("?" * len(labels)))
+                rows = [dict(r) for r in cur.execute(q, (date, *labels)).fetchall()]
             con.close()
-            return None, []
-        q = ("SELECT stock_no, bias_label, bias_score, tags_json, close "
-             "FROM longshort_signal WHERE date=? AND bias_label IN (%s)"
-             % ",".join("?" * len(labels)))
-        rows = [dict(r) for r in cur.execute(q, (date, *labels)).fetchall()]
-        con.close()
-        for r in rows:
-            try:
-                r["tags"] = [t[0] for t in json.loads(r.pop("tags_json") or "[]")]
-            except Exception:
-                r["tags"] = []
-        rows.sort(key=lambda r: (r["bias_label"] != "做空",
-                                 r["bias_score"] if r["bias_score"] is not None else 0))
+            for r in rows:
+                try:
+                    r["tags"] = [t[0] for t in json.loads(r.pop("tags_json") or "[]")]
+                except Exception:
+                    r["tags"] = []
+            rows.sort(key=lambda r: (r["bias_label"] != "做空",
+                                     r["bias_score"] if r["bias_score"] is not None else 0))
+        except Exception:
+            rows = []
+    if rows:
+        _save_fallback(date, rows)      # 本機 DB 有資料 → 更新承諾檔
         return date, rows
-    except Exception:
-        return None, []
+    return _load_fallback()             # 雲端／DB 不存在 → 讀承諾檔
 
 
 def short_symbols(date=None, db_path=None):
