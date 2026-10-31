@@ -1,5 +1,6 @@
 @echo off
 pushd "%~dp0"
+set HOST=0.0.0.0
 echo === Web dashboard auto-restart loop (restarts 5s after exit) ===
 python live.py --brief
 echo.
