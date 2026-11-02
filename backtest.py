@@ -169,8 +169,33 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
             if rules:
                 log.info(f"載入 {len(rules)} 條核准的避坑規則（引擎將自動擋下符合進場）")
     trades = []
+    # 模式→方向自動映射（進場三要素多空／B1B2 多／隔日沖多）
+    _dm = {"three_short": "short", "three_long": "long",
+           "b12_long": "long", "nextday_long": "long"}
+    if cfg.get("entry_mode") in _dm:
+        cfg = {**cfg, "direction": _dm[cfg["entry_mode"]]}
+    if cfg.get("entry_mode") == "nextday_long":
+        # 隔日沖買進（跨日）：收盤篩選 → 隔日開盤出場
+        trades = strategy.run_nextday_long(days, cfg, symbol, run_id, log)
+        for t in trades:
+            t["run_id"] = run_id
+            if save:
+                dup = tdb.trade_exists(conn, t)
+                tid = tdb.record_trade(conn, t)
+                if dup:
+                    log.debug(f"重複交易（is_dup）：{t['date']} {t['entry_time']}")
+        if save:
+            conn.close()
+            log.info(f"隔日沖回測完成 run_id={run_id}：{len(trades)} 筆"
+                     f"（已寫入 {tdb.DB_PATH}）")
+        return trades
+    prev_day_close = None
     for date in sorted(days):
-        res = strategy.run_day(days[date], cfg, symbol, date, log=log, rules=rules)
+        cfg_day = cfg
+        if cfg.get("entry_mode") == "b12_long" and prev_day_close:
+            cfg_day = {**cfg, "b12_prev_close": prev_day_close}
+        res = strategy.run_day(days[date], cfg_day, symbol, date, log=log, rules=rules)
+        prev_day_close = days[date][-1]["close"]
         for sig in res["signals"]:
             if save:
                 tdb.record_signal(conn, sig["date"], sig["symbol"], sig["ts"],
@@ -338,7 +363,9 @@ def main():
     ap.add_argument("--ab-rules", action="store_true", help="A/B 比較：無規則 vs 套用核准規則")
     ap.add_argument("--min-vol-ratio", type=float, default=0.0,
                     help="觸發K最小量能比（1.5＝只做放量長黑，過濾縮量假跌破）")
-    ap.add_argument("--entry-mode", choices=["next_open", "breakout"], default="next_open",
+    ap.add_argument("--entry-mode",
+                    choices=["next_open", "breakout", "three_short", "three_long",
+                             "b12_long", "nextday_long"], default="next_open",
                     help="進場模式：breakout＝等突破觸發K高低點（逐字稿爆量技巧）")
     ap.add_argument("--market-filter", action="store_true",
                     help="大盤風向過濾（加權指數日漲跌：漲=跳過放空、跌=跳過做多）")

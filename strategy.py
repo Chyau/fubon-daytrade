@@ -56,6 +56,20 @@ DEFAULTS = {
     "fee_discount": 0.3,     # 手續費折扣（逐字稿：三折）
     "min_fee": 20.0,         # 單邊手續費下限
     "tax_rate": 0.0015,      # 證交稅（當沖減半，課於賣出腿）
+    # ── 進場三要素（逐字稿：百萬絕技）──
+    "te_fib_lookback": 24,   # 黃金分割回看根數（5分K 24根≈2小時）
+    "te_fib_lo": 0.5,        # 壓力/支撐帶下緣（回撤 50%）
+    "te_fib_hi": 0.786,      # 帶上緣（回撤 78.6%）
+    "te_stall_shadow": 0.45, # 滯漲/止跌K：主導影線佔振幅 ≥45%
+    "te_grace": 3,           # 訊號後 N 根K內未觸發左一突破 → 放棄
+    # ── B1/B2 開盤兩買點（逐字稿：當沖兩買點）──
+    "b12_max_gap": 0.05,     # 開高 ≤5% 才做多（逐字稿原話）
+    # ── 隔日沖買進（逐字稿：隔日沖SOP）──
+    "nd_vol_mult": 1.5,      # 量能放大：vol ≥ 1.5 × MA5
+    "nd_bb_period": 20,      # 布林通道週期
+    "nd_bb_dev": 2.0,        # 布林標準差倍數
+    "nd_rel_high": 0.97,     # 收盤 ≥ 97% × 當日高點（相對高點）
+    "nd_min_vol_shares": 2000000,  # 流動性門檻（2000張 = 2,000,000 股）
 }
 
 
@@ -264,6 +278,8 @@ def _close(t, hhmm, fill, reason, cfg, date_str, log=None):
 def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
     """單日四階段狀態機。回傳 {"trade": dict|None, "signals": [未成交易事件]}"""
     cfg = {**DEFAULTS, **(cfg or {})}
+    if cfg.get("entry_mode") == "b12_long":
+        return run_day_b12(day_bars, cfg, symbol, date_str, log=log, rules=rules)
     day_bars = sorted(day_bars, key=lambda x: x["hhmm"])
     signals = []
     prev_bodies, prev_vols, prev_raw = [], [], []
@@ -290,8 +306,9 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
         if t is None:
             if pending:
                 entry = None
-                # 進場模式（逐字稿技巧③）：next_open＝下一根開盤；breakout＝等突破觸發K高低點
-                if cfg.get("entry_mode", "next_open") == "breakout":
+                # 進場模式：next_open／breakout／three_short／three_long（進場三要素）
+                mode = cfg.get("entry_mode", "next_open")
+                if mode == "breakout":
                     trig_l, trig_h = float(trigger["low"]), float(trigger["high"])
                     if direction == "short":
                         if float(b["low"]) <= trig_l:
@@ -301,6 +318,20 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                             entry = round(max(trig_h, float(b["open"])), 2)
                     if entry is None:
                         if b["hhmm"] >= cfg["entry_cutoff"]:  # 截止前未突破 → 放棄觸發
+                            pending = False
+                        push_bar(b)
+                        continue
+                elif mode in ("three_short", "three_long"):
+                    # 逐字稿：進場三要素 — 跌破左一最低（空）／突破左一最高（多）
+                    ll = (trigger_feat or {}).get("left_extreme")
+                    if ll is not None:
+                        if mode == "three_short" and float(b["low"]) < ll:
+                            entry = round(min(ll, float(b["open"])), 2)
+                        elif mode == "three_long" and float(b["high"]) > ll:
+                            entry = round(max(ll, float(b["open"])), 2)
+                    if entry is None:
+                        if b["hhmm"] >= cfg["entry_cutoff"] or \
+                                (i - trigger_idx) > int(cfg.get("te_grace", 3)):
                             pending = False
                         push_bar(b)
                         continue
@@ -324,7 +355,9 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     pending = False
                     push_bar(b)
                     continue
-                init_stop = round(float(trigger["open"]), 2)
+                init_stop = (trigger_feat or {}).get("stop_ref") \
+                    or round(float(trigger["open"]), 2)
+                init_stop = round(float(init_stop), 2)
                 # 倉位管理（逐字稿公式）：單張最大虧損 = |進場價 − 停損價| × 1,000
                 per_lot_risk = abs(entry - init_stop) * 1000
                 # 單張風險上限（0＝不設限）：直擊「高價股大賠」根因（2454/3008 案例）
@@ -373,7 +406,11 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     "risk_per_share": round(abs(entry - init_stop), 3),
                     "risk_budget": cfg["risk_budget"] or None, "lots": lots,
                 })
-                entry_reason = "E_LTBLACK_FIRST" if trigger_idx == 0 else "E_LTBLACK_INTRADAY"
+                if cfg.get("entry_mode") in ("three_short", "three_long"):
+                    entry_reason = "E_TE_" + ("FIRST" if trigger_idx == 0 else "INTRADAY")
+                else:
+                    entry_reason = ("E_LTBLACK_FIRST" if trigger_idx == 0
+                                    else "E_LTBLACK_INTRADAY")
                 t = {
                     "date": date_str, "symbol": symbol, "direction": direction,
                     "trigger_time": trigger["hhmm"], "trigger_open": init_stop,
@@ -401,7 +438,8 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                 ok2, _ = is_trigger_candle(b, prev_bodies, cfg, prev_vols, prev_raw)
                 better = (float(b["open"]) > t["stop"]) if direction == "long" \
                     else (float(b["open"]) < t["stop"])
-                if ok2 and better:
+                if ok2 and better and cfg.get("entry_mode") not in (
+                        "three_short", "three_long"):
                     t["stop"] = round(float(b["open"]), 2)
                     t["stop_updates"].append((b["hhmm"], t["stop"]))
                     t["stop_update_count"] += 1
@@ -411,7 +449,12 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                 push_bar(b)
                 continue  # 進場K不做停損檢查（同一根K不自我否定）
 
-            ok, feat = is_trigger_candle(b, prev_bodies, cfg, prev_vols, prev_raw)
+            _mode = cfg.get("entry_mode", "next_open")
+            if _mode in ("three_short", "three_long"):
+                ok, feat = detect_three(b, prev_raw, cfg,
+                                        "short" if _mode == "three_short" else "long")
+            else:
+                ok, feat = is_trigger_candle(b, prev_bodies, cfg, prev_vols, prev_raw)
             if ok:
                 # 市場風向過濾（逐字稿5大技巧①）：逆風日不進場
                 mb = (cfg.get("market_bias_map") or {}).get(date_str)
@@ -468,7 +511,8 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                    cfg, date_str, log)
             break
         ok, _f = is_trigger_candle(b, prev_bodies, cfg, prev_vols, prev_raw)
-        if ok:  # 新觸發K → 出場點隨最新證據順向更新（空單下移／多單上移）
+        if ok and cfg.get("entry_mode") not in ("three_short", "three_long"):
+            # 三要素模式：停損固定於訊號K極值（結構停損），不做長黑K順向移動
             new_stop = round(float(b["open"]), 2)
             better = (new_stop > t["stop"]) if direction == "long" else (new_stop < t["stop"])
             if better:
@@ -495,3 +539,233 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                         "detail": json.dumps({"trigger_open": trigger["open"]},
                                              ensure_ascii=False)})
     return {"trade": t, "signals": signals}
+
+
+# ==================== 進場三要素（逐字稿：百萬絕技） ====================
+def detect_three(b, prev_raw, cfg, direction):
+    """三要素偵測：①黃金分割壓力/支撐帶 ②滯漲/止跌K ③左一極值（下一根突破確認）
+    回傳 (ok, feat)；feat.left_extreme＝左一極值（進場觸發線）、feat.stop_ref＝結構停損"""
+    W = int(cfg.get("te_fib_lookback", 24))
+    if len(prev_raw) < 6:
+        return False, {}
+    win = prev_raw[-W:]
+    hi = max(float(x["high"]) for x in win)
+    lo = min(float(x["low"]) for x in win)
+    rng = hi - lo
+    o, h, l, c = (float(b["open"]), float(b["high"]),
+                  float(b["low"]), float(b["close"]))
+    rb = h - l
+    if rng <= 0 or rb <= 0:
+        return False, {}
+    fl = float(cfg.get("te_fib_lo", 0.5))
+    fh = float(cfg.get("te_fib_hi", 0.786))
+    sr = float(cfg.get("te_stall_shadow", 0.45))
+    if direction == "short":
+        zl, zh = lo + rng * fl, lo + rng * fh            # ① 壓力帶（回撤 50%~78.6%）
+        if not (zl <= h <= zh):
+            return False, {}
+        upper = h - max(o, c)
+        if upper / rb < sr or c >= o:                     # ② 滯漲K：上影線主導＋收跌
+            return False, {}
+        return True, {"left_extreme": round(l, 2),        # ③ 左一最低＝本根低點
+                      "stop_ref": round(h, 2),
+                      "pattern": "TE滯漲", "fib_zone": [round(zl, 2), round(zh, 2)]}
+    zl, zh = hi - rng * fh, hi - rng * fl                 # ① 支撐帶
+    if not (zl <= l <= zh):
+        return False, {}
+    lower = min(o, c) - l
+    if lower / rb < sr or c <= o:                         # ② 止跌K：下影線主導＋收漲
+        return False, {}
+    return True, {"left_extreme": round(h, 2),            # ③ 左一最高＝本根高點
+                  "stop_ref": round(l, 2),
+                  "pattern": "TE止跌", "fib_zone": [round(zl, 2), round(zh, 2)]}
+
+
+# ==================== B1/B2 開盤兩買點（逐字稿：當沖兩買點） ====================
+def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
+    """B1＝開盤後拉回（跌破開盤價）再重新突破開盤價 → 買進。
+    出場：跌破起漲點（結構低點）全賣（一底比一底高 → 起漲點上移）；13:20 時間出場。
+    開高 >5%（vs 前收）不做（逐字稿原話）。"""
+    day_bars = sorted(day_bars, key=lambda x: x["hhmm"])
+    signals = []
+    if not day_bars:
+        return {"trade": None, "signals": signals}
+    op = float(day_bars[0]["open"])
+    pc = cfg.get("b12_prev_close")
+    if pc:
+        gap = (op - float(pc)) / float(pc)
+        if not (0 < gap <= float(cfg.get("b12_max_gap", 0.05))):
+            if log:
+                log.info(f"[{date_str}] {symbol} 開高 {gap:+.1%} 不符合 ≤5% → 不做（B12_GAP_SKIP）")
+            return {"trade": None, "signals": signals}
+
+    def add_event(t_, kind, reason, bar, detail):
+        t_["events"].append({"ts": f"{date_str} {bar['hhmm']}", "event": kind,
+                             "reason": reason,
+                             "detail": json.dumps(detail, ensure_ascii=False)})
+
+    t = None
+    below_seen = False
+    pb_low = None        # 開盤後拉回低點（起漲點）
+    high_ref = None      # 進場後高點（B2 觸發線／結構追蹤）
+    pb2_low = None       # 進場後拉回低點（higher-low 候選）
+    for b in day_bars:
+        h, l = float(b["high"]), float(b["low"])
+        c, o = float(b["close"]), float(b["open"])
+        if t is None:
+            if not below_seen:
+                if l < op:
+                    below_seen = True
+                    pb_low = l
+                continue
+            pb_low = min(pb_low, l)
+            # B1：重新突破開盤價（收盤確認或盤中觸及皆可）
+            if h > op and b["hhmm"] <= cfg["entry_cutoff"]:
+                entry = round(op, 2)
+                stop = round(pb_low, 2)
+                if stop >= entry:
+                    below_seen = False
+                    continue
+                per_lot = abs(entry - stop) * 1000
+                if cfg["risk_budget"] > 0 and per_lot > cfg["risk_budget"]:
+                    if log:
+                        log.info(f"[{date_str}] B1 單張風險 {per_lot:,.0f} 超預算 → 跳過")
+                    continue
+                lots = (max(1, min(int(cfg["risk_budget"] // per_lot),
+                                   int(cfg.get("max_lots", 10))))
+                        if cfg["risk_budget"] > 0 else max(1, int(cfg.get("lots", 1))))
+                feat = {"pattern": "B1", "pb_low": stop, "weekday": weekday_of(date_str),
+                        "trigger_bucket": trigger_bucket(b["hhmm"]),
+                        "body_pct_band": body_pct_band(
+                            abs(c - o) / o * 100 if o else 0)}
+                t = {"date": date_str, "symbol": symbol, "direction": "long",
+                     "trigger_time": b["hhmm"], "trigger_open": op,
+                     "entry_time": b["hhmm"], "entry_price": entry,
+                     "initial_stop": stop, "final_stop": stop,
+                     "stop_update_count": 0,
+                     "exit_time": None, "exit_reason": None, "exit_price": None,
+                     "lots": lots, "shares": lots * 1000,
+                     "gross_pnl": None, "fees": None, "tax": None, "net_pnl": None,
+                     "risk_per_share": round(abs(entry - stop), 3), "r_multiple": None,
+                     "bars_held": 1,
+                     "entry_reason": "E_B1", "result_tag": None,
+                     "features": json.dumps(feat, ensure_ascii=False),
+                     "events": [], "stop_updates": [], "stop": stop}
+                add_event(t, "ENTRY", "E_B1", b,
+                          {"entry": entry, "stop": stop, "lots": lots})
+                if log:
+                    log.info(f"[{date_str}] {symbol} B1 買進 {entry} @ {b['hhmm']}｜"
+                             f"起漲點停損 {stop}｜{lots} 張")
+                high_ref = h
+                pb2_low = None
+                continue
+            continue
+        # ── 持倉：跌破起漲點全賣；一底比一底高 → 起漲點上移 ──
+        t["bars_held"] += 1
+        if l < t["stop"]:
+            fill = round(min(t["stop"], o), 2)
+            _close(t, b["hhmm"], fill,
+                   "X_STOP_GAP" if o < t["stop"] else "X_STOP_TOUCH",
+                   cfg, date_str, log)
+            break
+        if high_ref is None or h > high_ref:
+            if high_ref is not None and pb2_low is not None and pb2_low > t["stop"]:
+                t["stop"] = round(pb2_low, 2)
+                t["stop_updates"].append((b["hhmm"], t["stop"]))
+                t["stop_update_count"] += 1
+                add_event(t, "STOP_UPDATE", "S_B12_TRAIL", b, {"new_stop": t["stop"]})
+                if log:
+                    log.debug(f"[{date_str}] 起漲點上移 → {t['stop']}（一底比一底高）")
+            high_ref = h
+            pb2_low = None
+        elif pb2_low is None or l < pb2_low:
+            pb2_low = l
+        if b["hhmm"] >= cfg["force_exit"]:
+            _close(t, b["hhmm"], c, "X_TIME_1320", cfg, date_str, log)
+            break
+    if t is not None and t["exit_price"] is None and cfg.get("eod_exit", True):
+        last = day_bars[-1]
+        _close(t, last["hhmm"], float(last["close"]), "X_EOD", cfg, date_str, log)
+    return {"trade": t, "signals": signals}
+
+
+# ==================== 隔日沖買進（逐字稿：隔日沖SOP） ====================
+def run_nextday_long(days, cfg, symbol, run_id, log=None):
+    """收盤篩選：量增（≥1.5×MA5）× 收盤站布林上軌(20,2) × 收盤≥97%日高（相對高點）
+    × 紅K × 流動性門檻 → 當日收盤買進 → 隔日開盤出場（開高賺價差／開低認賠）。
+    跨日持有：手續費兩腿＋證交稅 0.3%（非當沖減半）。"""
+    cfg = {**DEFAULTS, **(cfg or {})}
+    dates = sorted(days)
+    closes, vols = [], []
+    trades = []
+    pend = None
+    period = int(cfg.get("nd_bb_period", 20))
+    shares = 1000
+    for d in dates:
+        bars = sorted(days[d], key=lambda x: x["hhmm"])
+        if not bars:
+            continue
+        o = float(bars[0]["open"])
+        h = max(float(b["high"]) for b in bars)
+        c = float(bars[-1]["close"])
+        vol = sum(float(b.get("volume", 0) or 0) for b in bars)
+        # ① 隔日開盤出場（逐字稿：開盤開高即出場；開低同樣紀律出場）
+        if pend:
+            en, ed = pend["entry_price"], pend["date"]
+            xp = float(bars[0]["open"])
+            fee_b = max(cfg["min_fee"], en * shares * cfg["fee_rate"] * cfg["fee_discount"])
+            fee_s = max(cfg["min_fee"], xp * shares * cfg["fee_rate"] * cfg["fee_discount"])
+            tax = xp * shares * 0.003
+            net = round((xp - en) * shares - fee_b - fee_s - tax, 2)
+            trades.append({
+                "date": ed, "symbol": symbol, "direction": "long",
+                "trigger_time": "13:20", "trigger_open": en,
+                "entry_time": "13:20", "entry_price": en,
+                "initial_stop": None, "final_stop": None, "stop_update_count": 0,
+                "exit_time": "09:00", "exit_reason": "X_NEXT_OPEN", "exit_price": xp,
+                "lots": 1, "shares": shares,
+                "gross_pnl": round((xp - en) * shares, 2),
+                "fees": round(fee_b + fee_s, 2), "tax": round(tax, 2),
+                "net_pnl": net, "risk_per_share": None, "r_multiple": None,
+                "bars_held": 1, "entry_reason": "E_NEXTDAY_LONG",
+                "result_tag": classify("X_NEXT_OPEN", net),
+                "features": json.dumps(
+                    {"exit_date": d,
+                     "gap_pct": round((xp / en - 1) * 100, 2)}, ensure_ascii=False),
+                "events": [], "stop_updates": [], "stop": None,
+            })
+            pend = None
+        # ② 收盤篩選（需 ≥ 布林週期歷史）
+        if len(closes) >= period:
+            win = closes[-period:]
+            ma = sum(win) / len(win)
+            sd = (sum((x - ma) ** 2 for x in win) / len(win)) ** 0.5
+            boll_up = ma + float(cfg.get("nd_bb_dev", 2.0)) * sd
+            vma5 = (sum(vols[-5:]) / 5) if len(vols) >= 5 else None
+            ok = (c > boll_up
+                  and (vma5 is None or vol >= float(cfg.get("nd_vol_mult", 1.5)) * vma5)
+                  and c >= float(cfg.get("nd_rel_high", 0.97)) * h
+                  and c > o
+                  and vol >= float(cfg.get("nd_min_vol_shares", 2_000_000)))
+            if ok:
+                pend = {"date": d, "entry_price": c}
+                if log:
+                    log.info(f"[{d}] {symbol} 隔日沖訊號：收 {c} > 布林上軌 {boll_up:.1f}"
+                             f"｜量 {vol:,.0f}｜相對高點 {c / h * 100:.0f}%")
+        closes.append(c)
+        vols.append(vol)
+    if pend:  # 資料收尾：無隔日資料 → 以訊號日收盤假平（零損益，僅標記）
+        en, ed = pend["entry_price"], pend["date"]
+        trades.append({
+            "date": ed, "symbol": symbol, "direction": "long",
+            "trigger_time": "13:20", "trigger_open": en,
+            "entry_time": "13:20", "entry_price": en,
+            "initial_stop": None, "final_stop": None, "stop_update_count": 0,
+            "exit_time": "13:20", "exit_reason": "X_NO_NEXT", "exit_price": en,
+            "lots": 1, "shares": shares, "gross_pnl": 0.0, "fees": 0.0, "tax": 0.0,
+            "net_pnl": 0.0, "risk_per_share": None, "r_multiple": None,
+            "bars_held": 1, "entry_reason": "E_NEXTDAY_LONG", "result_tag": "R_NO_NEXT",
+            "features": json.dumps({"note": "資料末端無隔日"}, ensure_ascii=False),
+            "events": [], "stop_updates": [], "stop": None,
+        })
+    return trades
