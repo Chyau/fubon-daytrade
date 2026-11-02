@@ -6,11 +6,11 @@ name: paper-intraday
 
 on:
   schedule:
-    # 避開 :00/:15/:30/:45（GitHub 高負載時段易延遲/丟棄）→ 錯開分鐘＋雙冗餘
-    - cron: "4,19,34,49 1-5 * * 1-5"    # 台灣 09:04–13:49 每 15 分（A 線）
-    - cron: "11,26,41,56 1-5 * * 1-5"   # 台灣 09:11–13:56 每 15 分（B 線備援）
-    - cron: "58 5 * * 1-5"              # 台灣 13:58 收盤收尾
-    - cron: "43 6 * * 1-5"              # 台灣 14:43 終極補抓（yf 延遲 20 分＋排程延遲）
+    # 可靠性設計：一天只需「一次」排程成功 — job 內建全日迴圈（每 15 分重放至台灣 14:05）
+    - cron: "4 1 * * 1-5"     # 台灣 09:04（主線）
+    - cron: "11 1 * * 1-5"    # 台灣 09:11（冗餘 1）
+    - cron: "26 1 * * 1-5"    # 台灣 09:26（冗餘 2）
+    - cron: "43 6 * * 1-5"    # 台灣 14:43 收盤終極補抓（第 4 次獨立機會）
   workflow_dispatch:
     inputs:
       symbols:
@@ -36,7 +36,7 @@ concurrency:
 jobs:
   step:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 330   # 全日迴圈 09:04→14:05 台灣（5 小時）
     steps:
       - uses: actions/checkout@v5
 
@@ -53,12 +53,24 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Paper step（重放＋去重＋快照＋推送）
+      - name: 迴圈去重（10 分鐘內已有 paper-bot 活動 → 跳過冗餘觸發）
+        run: |
+          LAST=$(git log -1 --format=%ct --author=paper-bot 2>/dev/null || echo 0)
+          NOW=$(date +%s)
+          AGE=$((NOW - LAST))
+          echo "paper-bot 最後 commit 距今 ${AGE} 秒"
+          if [ "$AGE" -lt 720 ]; then
+            echo "另一個迴圈活躍中 — 跳過本次冗餘觸發"
+            exit 0
+          fi
+
+      - name: Paper step（晨間觸發→全日迴圈；EOD 觸發→單次補抓）
         run: >
           python tools/paper_step.py --push
           --period "${{ inputs.period || '5d' }}"
           --symbols "${{ inputs.symbols }}"
           --risk-budget "${{ inputs.risk_budget || '0' }}"
+          --loop-until "06:05"
         env:
           SNAPSHOT_PASSWORD: ${{ secrets.SNAPSHOT_PASSWORD }}
 

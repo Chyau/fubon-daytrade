@@ -19,6 +19,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -82,8 +83,31 @@ def main():
                     help="自訂標的（逗號分隔；留空 = 多空清單 24 檔）")
     ap.add_argument("--risk-budget", type=float, default=0.0,
                     help="單筆風險預算（0 = 固定 1 張）")
+    ap.add_argument("--loop-until", default="",
+                    help="UTC HH:MM — 每 15 分重複執行至此時刻（雲端長駐模式）")
     a = ap.parse_args()
+    log = get_logger("paper")
+    if a.loop_until:
+        eh, em = (int(x) for x in a.loop_until.split(":"))
+        n = 0
+        while True:
+            n += 1
+            log.info(f"── 雲端迴圈第 {n} 次 ──")
+            try:
+                run_once(a, log)
+            except Exception as e:
+                log.error(f"單次執行失敗：{str(e)[:120]}")
+            now = datetime.utcnow()
+            if (now.hour, now.minute) >= (eh, em):
+                log.info(f"已達 UTC {a.loop_until}，迴圈結束（共 {n} 次）")
+                return 0
+            now2 = time.time()
+            nxt = (int(now2) // 900 + 1) * 900
+            time.sleep(max(5, nxt - now2))
+    return run_once(a, log)
 
+
+def run_once(a, log):
     if a.symbols.strip():
         syms = [s.strip().upper().replace(".TW", "").replace(".TWO", "")
                 for s in a.symbols.replace("，", ",").split(",") if s.strip()]
@@ -101,7 +125,6 @@ def main():
     cfg = {**strategy.DEFAULTS, "risk_budget": a.risk_budget}
     run_id = (f"{run_kind}-{datetime.now():%Y%m%d}" if run_kind == "PAPER"
               else f"BT-{datetime.now():%Y%m%d-%H%M}")
-    log = get_logger("paper")
 
     log.info(f"批次下載 {len(syms)} 檔（{a.period} 5 分K）...")
     data = batch_fetch(syms, a.period, log)
