@@ -359,7 +359,11 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     or round(float(trigger["open"]), 2)
                 init_stop = round(float(init_stop), 2)
                 # 倉位管理（逐字稿公式）：單張最大虧損 = |進場價 − 停損價| × 1,000
-                per_lot_risk = abs(entry - init_stop) * 1000
+                # 逐字稿公式＋tick 滑價緩衝：停損觸價成交 = 停損價 ± 一個 tick
+                # （實訓案例：2345 停損 1510 → tick(≥1000元股)=5 → 成交 1515，
+                #   預算 5,000 實虧 13,548 → 風險必須含一個 tick）
+                per_lot_risk = (abs(entry - init_stop)
+                                + tick_size(entry)) * 1000
                 # 單張風險上限（0＝不設限）：直擊「高價股大賠」根因（2454/3008 案例）
                 if cfg.get("max_lot_risk", 0) > 0 and per_lot_risk > cfg["max_lot_risk"]:
                     signals.append({"date": date_str, "symbol": symbol,
@@ -626,7 +630,7 @@ def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
                 if stop >= entry:
                     below_seen = False
                     continue
-                per_lot = abs(entry - stop) * 1000
+                per_lot = (abs(entry - stop) + tick_size(entry)) * 1000
                 if cfg["risk_budget"] > 0 and per_lot > cfg["risk_budget"]:
                     if log:
                         log.info(f"[{date_str}] B1 單張風險 {per_lot:,.0f} 超預算 → 跳過")

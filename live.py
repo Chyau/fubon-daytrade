@@ -125,11 +125,53 @@ class LiveEngine:
             return False
         return dtime(8, 45) <= now.time() <= dtime(13, 35)
 
+    def _gate_close_positions(self):
+        """閘門關閉（13:35 後）仍有未平倉 → 以最後已知價格強制結算入庫。
+        原因：yf 延遲 15-20 分，13:20 的 K 棒在 13:40 後才出現，
+        但閘門 13:35 已關 → 時間出場永遠模擬不到 → 持倉卡在記憶體。"""
+        if not self.state["open_pos"]:
+            return
+        conn = tdb.connect()
+        try:
+            for sym, p in list(self.state["open_pos"].items()):
+                entry = float(p["entry"])
+                exit_price = float(p["last"])
+                shares = int(p["lots"]) * 1000
+                gross = (entry - exit_price) * shares
+                fee_b = max(20, entry * shares * 0.001425 * 0.3)
+                fee_s = max(20, exit_price * shares * 0.001425 * 0.3)
+                tax = entry * shares * 0.0015   # 放空：券賣稅在進場（賣出）腿
+                net = round(gross - fee_b - fee_s - tax, 2)
+                trade = {
+                    "date": p["date"], "symbol": sym, "direction": "short",
+                    "trigger_time": p["entry_time"], "trigger_open": entry,
+                    "entry_time": p["entry_time"], "entry_price": entry,
+                    "initial_stop": p["stop"], "final_stop": p["stop"],
+                    "stop_update_count": 0,
+                    "exit_time": "13:35", "exit_reason": "X_GATE_CLOSE",
+                    "exit_price": exit_price,
+                    "lots": int(p["lots"]), "shares": shares,
+                    "gross_pnl": round(gross, 2),
+                    "fees": round(fee_b + fee_s, 2), "tax": round(tax, 2),
+                    "net_pnl": net, "risk_per_share": None, "r_multiple": None,
+                    "bars_held": 1, "entry_reason": "E_GATE_RECOVER",
+                    "result_tag": strategy.classify("X_GATE_CLOSE", net),
+                    "features": str({"note": "閘門收尾：延遲資料未及時模擬 13:20 出場"}),
+                    "events": [], "stop_updates": [], "stop": p["stop"],
+                }
+                tid = tdb.record_trade(conn, trade)
+                log.info(f"[live][{sym}] 閘門收尾入庫 #{tid}：出 {exit_price}"
+                         f" 淨 {net:+,.0f}（X_GATE_CLOSE）")
+                self.state["open_pos"].pop(sym, None)
+        finally:
+            conn.close()
+
     def _cycle(self):
         if not self.state["symbols"]:
             return
         if self.state["gate"] and not self._in_session():
             self.state["last_check"] = datetime.now().strftime("%H:%M:%S") + "（非交易時段）"
+            self._gate_close_positions()
             return
         cfg = {**strategy.DEFAULTS,
                "risk_budget": self.state["risk_budget"], "lots": self.state["lots"],
