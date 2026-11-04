@@ -175,6 +175,125 @@ def compute_pits(min_n=4, gap=0.2):
     return base, items, found
 
 
+# ==================== 篩選工具（各分頁共用） ====================
+
+def _flt():
+    """解析 GET 篩選參數（回傳 dict；空值＝不篩）"""
+    g = request.args
+    try:
+        limit = min(2000, max(10, int(g.get("limit", 200) or 200)))
+    except ValueError:
+        limit = 200
+    return {"symbol": (g.get("symbol") or "").strip().upper(),
+            "d1": (g.get("d1") or "").strip().replace("/", "-"),
+            "d2": (g.get("d2") or "").strip().replace("/", "-"),
+            "direction": (g.get("direction") or "").strip(),
+            "tag": (g.get("tag") or "").strip(),
+            "exit": (g.get("exit") or "").strip().upper(),
+            "pnl": (g.get("pnl") or "").strip(),
+            "run_id": (g.get("run_id") or "").strip(),
+            "side": (g.get("side") or "").strip(),
+            "mode": (g.get("mode") or "").strip(),
+            "ok": (g.get("ok") or "").strip(),
+            "limit": limit}
+
+
+def _trades_where(f, with_run=True):
+    """交易篩選 → (WHERE 子句, 參數)。f 來自 _flt()"""
+    w, p = [], []
+    if f.get("symbol"):
+        w.append("symbol LIKE ?")
+        p.append(f["symbol"] + "%")
+    if f.get("d1"):
+        w.append("date >= ?")
+        p.append(f["d1"])
+    if f.get("d2"):
+        w.append("date <= ?")
+        p.append(f["d2"])
+    if f.get("direction") in ("short", "long"):
+        w.append("direction = ?")
+        p.append(f["direction"])
+    if f.get("tag"):
+        w.append("result_tag LIKE ?")
+        p.append(f["tag"] + "%")
+    if f.get("exit"):
+        w.append("exit_reason LIKE ?")
+        p.append(f["exit"] + "%")
+    if f.get("pnl") == "win":
+        w.append("net_pnl > 0")
+    elif f.get("pnl") == "loss":
+        w.append("net_pnl < 0")
+    if with_run and f.get("run_id"):
+        w.append("run_id LIKE ?")
+        p.append(f["run_id"] + "%")
+    return (" AND " + " AND ".join(w)) if w else "", p
+
+
+def _filter_bar(f, fields, action=""):
+    """共通篩選列（GET 表單）。fields：要顯示的欄位名 list"""
+    inp = lambda name, ph, size, val: (f'<input name="{name}" value="{val}" '
+                                       f'size="{size}" placeholder="{ph}">')
+    sel = lambda name, opts, cur: (
+        f'<select name="{name}"><option value="">全部</option>' + "".join(
+            f'<option value="{v}" {"selected" if v == cur else ""}>{t}</option>'
+            for v, t in opts) + "</select>")
+    out = ['<div class="card"><form method="get" style="font-size:12px;line-height:2">']
+    for k in fields:
+        if k == "symbol":
+            out.append(f'標的 {inp("symbol", "2330", 7, f["symbol"])}')
+        elif k == "d1":
+            out.append(f'起 <input type="date" name="d1" value="{f["d1"]}">')
+        elif k == "d2":
+            out.append(f'訖 <input type="date" name="d2" value="{f["d2"]}">')
+        elif k == "direction":
+            out.append("方向 " + sel("direction", [("short", "做空"), ("long", "做多")],
+                                     f["direction"]))
+        elif k == "tag":
+            out.append("標籤 " + sel("tag", [
+                ("R_TRAIL_LOCK", "移動停利"), ("R_STOP_REVERSAL", "停損反轉"),
+                ("R_TREND_RUN", "趨勢行"), ("R_GAP_AWAY", "跳空"),
+                ("R_FLAT_CHOP", "盤整")], f["tag"]))
+        elif k == "exit":
+            out.append(f'出場碼 {inp("exit", "X_STOP…", 9, f["exit"])}')
+        elif k == "pnl":
+            out.append("盈虧 " + sel("pnl", [("win", "賺"), ("loss", "賠")],
+                                     f["pnl"]))
+        elif k == "run_id":
+            out.append(f'run_id {inp("run_id", "前綴比對", 14, f["run_id"])}')
+        elif k == "side":
+            out.append("方向 " + sel("side", [("buy", "買"), ("sell", "賣")],
+                                     f["side"]))
+        elif k == "mode":
+            out.append("環境 " + sel("mode", [("dry", "dry"), ("test", "test"),
+                                              ("live", "正式⚠")], f["mode"]))
+        elif k == "ok":
+            out.append("結果 " + sel("ok", [("1", "成功"), ("0", "失敗")],
+                                     f["ok"]))
+        elif k == "limit":
+            out.append(f'筆數 {inp("limit", "200", 5, f["limit"])}')
+    out.append('<button class="btn">套用篩選</button> '
+               f'<a href="{action or request.path}" class="muted">清除</a></form></div>')
+    return "".join(out)
+
+
+def suggest_for_direction(direction):
+    """依方向回傳建議標的 list（多空分類清單）：
+    做多→做多+偏多；做空→做空+偏空；多空雙向→四組全部（做空組在前）
+    無資料 → []（呼叫端自行後備）"""
+    try:
+        import longshort as _ls
+        if direction == "long":
+            _d, rows = _ls.load_longshort(labels=("做多", "偏多"))
+            return [r["stock_no"] for r in rows]
+        _d, rows = _ls.load_longshort()
+        if direction == "both":
+            _d2, lrows = _ls.load_longshort(labels=("做多", "偏多"))
+            rows = list(rows) + list(lrows)
+        return [r["stock_no"] for r in rows]
+    except Exception:
+        return []
+
+
 # ==================== 路由 ====================
 @app.route("/")
 def index():
@@ -432,8 +551,12 @@ def live_page():
         # 做多清單需另查（預設 labels 只回做空/偏空；直接從空方 rows 過濾永遠為空）
         _ld_date, _ld_rows = _ls.load_longshort(labels=("做多", "偏多"))
         _long_syms = ",".join(r["stock_no"] for r in _ld_rows)
+        _short_syms = ",".join(r["stock_no"] for r in _ls_rows)
+        _both_syms = ",".join(dict.fromkeys(
+            _short_syms.split(",") + _long_syms.split(",")))
     except Exception:
-        _ls_date, _ls_n_strong, _ls_n_weak, _long_syms = None, 0, 0, ""
+        _ls_date, _ls_n_strong, _ls_n_weak = None, 0, 0
+        _long_syms = _short_syms = _both_syms = ""
     return page("""<h1>⚡ 盤中自動執行引擎（佛系當沖法）</h1>
 <div class="card"><h2>狀態</h2>
 <p>執行中：<b class="{{'pos' if st.running else 'muted'}}">{{'RUNNING' if st.running else 'STOPPED'}}</b>｜
@@ -453,6 +576,9 @@ def live_page():
 {% set _d = st.get('direction') or 'short' %}{% set _m = st.get('mode') or 'dry' %}{% set _s = st.get('source') or 'yf' %}
 <form method="post" action="{{ url_for('live_start') }}">
 標的 <input name="symbols" value="{{syms}}" size="22" placeholder="2330,2426">
+<button type="button" class="btn" onclick="fillSyms('short')">做空清單</button>
+<button type="button" class="btn" onclick="fillSyms('long')">做多清單</button>
+<button type="button" class="btn" onclick="fillSyms('both')">多空全清單</button>
 方向 <label><input type="radio" name="direction" value="short" {{'checked' if _d=='short'}}>做空</label>
 <label><input type="radio" name="direction" value="long" {{'checked' if _d=='long'}}>做多</label>
 <label><input type="radio" name="direction" value="both" {{'checked' if _d=='both'}}>多空雙向</label>
@@ -469,6 +595,12 @@ def live_page():
 <script>
 /* 5 秒自動刷新會重載整頁→未按「啟動」的表單選擇會被清掉。
    解法：任何變更立即存 localStorage；頁面載入時還原。 */
+var FSDT_LISTS = {short: "{{_short_syms}}", long: "{{_long_syms}}", both: "{{_both_syms}}"};
+function fillSyms(k){
+  var sy = document.querySelector('input[name="symbols"]');
+  if (sy && FSDT_LISTS[k]){ sy.value = FSDT_LISTS[k];
+    sy.dispatchEvent(new Event('change')); }
+}
 (function(){
   var SEL = 'input[name="symbols"], input[name="direction"], select[name="mode"], select[name="source"], input[name="risk_budget"], input[name="interval"], input[name="auto_min_n"], input[name="gate"], input[name="auto_risk"]';
   function save(){
@@ -541,16 +673,22 @@ def live_page():
                  st=st, syms=syms, open_pos=open_pos, refresh=5,
                  money=money, cls=cls, fmt=fmt,
                  _ls_date=_ls_date, _ls_n_strong=_ls_n_strong, _ls_n_weak=_ls_n_weak,
-                 _long_syms=_long_syms)
+                 _long_syms=_long_syms, _short_syms=_short_syms, _both_syms=_both_syms)
 
 
 @app.route("/live/start", methods=["POST"])
 def live_start():
-    symbols = [s.strip() for s in
-               request.form.get("symbols", "").replace("，", ",").split(",") if s.strip()]
     mode = request.form.get("mode", "dry")
     source = request.form.get("source", "yf")
     direction = request.form.get("direction", "short")
+    symbols = [s.strip() for s in
+               request.form.get("symbols", "").replace("，", ",").split(",") if s.strip()]
+    if not symbols:
+        # 標的留空 → 依方向自動填入多空分類清單（做多→做多+偏多；做空→做空+偏空；雙向→全部）
+        symbols = suggest_for_direction(direction)
+        if symbols:
+            log.info(f"標的留空→依方向 {direction} 自動填入 {len(symbols)} 檔"
+                     f"（{','.join(symbols[:6])}…）")
     risk = float(request.form.get("risk_budget", 0) or 0)
     interval = int(request.form.get("interval", 20) or 20)
     gate = bool(request.form.get("gate"))
