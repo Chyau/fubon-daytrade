@@ -667,12 +667,25 @@ def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
             pb_low = min(pb_low, l)
             # B1：重新突破開盤價（收盤確認或盤中觸及皆可）
             if h > op and b["hhmm"] <= cfg["entry_cutoff"]:
+                # 大盤風向過濾：做多模式在大盤跌日不進場（與 run_day 同語意）
+                mb = (cfg.get("market_bias_map") or {}).get(date_str)
+                if mb and mb == "down":
+                    if log:
+                        log.info(f"[{date_str}] {symbol} 大盤逆風（down）→ B1 跳過")
+                    below_seen = False
+                    continue
                 entry = round(op, 2)
                 stop = round(pb_low, 2)
                 if stop >= entry:
                     below_seen = False
                     continue
                 per_lot = (abs(entry - stop) + tick_size(entry)) * 1000
+                if cfg.get("min_lot_risk", 0) > 0 and per_lot < cfg["min_lot_risk"]:
+                    if log:
+                        log.info(f"[{date_str}] B1 單張風險 {per_lot:,.0f} 低於下限 "
+                                 f"{cfg['min_lot_risk']:,.0f}（成本不敷）→ 跳過")
+                    below_seen = False
+                    continue
                 if cfg["risk_budget"] > 0 and per_lot > cfg["risk_budget"]:
                     if log:
                         log.info(f"[{date_str}] B1 單張風險 {per_lot:,.0f} 超預算 → 跳過")

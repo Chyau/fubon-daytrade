@@ -929,13 +929,20 @@ def backtest_page():
             direction = None          # auto：依進場模式自動映射
         daytrade_check = bool(request.form.get("daytrade_check"))
         no_blacklist = bool(request.form.get("no_blacklist", "on"))
+        market_filter = bool(request.form.get("market_filter"))
         raw = (request.form.get("symbols") or "").replace("，", ",").replace(" ", ",")
         symbols = [s.strip().upper() for s in raw.split(",") if s.strip()][:30]
         cfg = {**strategy.DEFAULTS, "risk_budget": risk,
                "entry_mode": entry_mode, "direction": direction}
         # 大盤方向地圖（坑點維度 market_dir；失敗留白）
         try:
-            cfg["market_dir_map"] = bt.fetch_market_map()
+            _mmap = bt.fetch_market_map()
+            cfg["market_dir_map"] = _mmap
+            if market_filter:
+                # 前視偏差修正：進場日只能用「前一日」大盤方向（當日收盤盤中未知）
+                _ds = sorted(_mmap)
+                cfg["market_bias_map"] = {_ds[i]: _mmap[_ds[i - 1]]
+                                          for i in range(1, len(_ds))}
         except Exception as _e:
             log.warning(f"大盤地圖取得失敗（維度留白）：{_e}")
         run_id = _t.strftime("%Y%m%d-%H%M%S") + "-" + _uuid.uuid4().hex[:6]
@@ -1029,7 +1036,8 @@ def backtest_page():
 單筆風險預算 <input name="risk_budget" value="0" size="8"> 元（0＝固定 1 張）｜
 <label><input type="checkbox" name="use_rules" checked> 套用核准規則</label>｜
 <label><input type="checkbox" name="daytrade_check" checked> 當沖/融券資格預檢</label>｜
-<label><input type="checkbox" name="no_blacklist" checked> 排除黑名單股</label></p>
+<label><input type="checkbox" name="no_blacklist" checked> 排除黑名單股</label>｜
+<label><input type="checkbox" name="market_filter" checked> 大盤風向過濾</label></p>
 {% if ls_syms %}<p class="muted">🧭 已預填多空分類清單（基準日 {{ls_date}}｜
 做空＋偏空，做空優先排序）— 來源：權證小哥 tw_stock.db，可自行增刪後執行。</p>{% endif %}
 <p>富邦模式：回溯天數 <input name="days_back" value="10" size="3">（需 .env 測試憑證）｜
