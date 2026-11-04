@@ -601,11 +601,40 @@ def backtest_page():
         period = request.form.get("period", "5d")
         days_back = max(1, min(180, int(request.form.get("days_back", 60) or 60)))
         use_rules = bool(request.form.get("use_rules", "on"))
+        entry_mode = request.form.get("entry_mode", "next_open")
+        if entry_mode not in ("next_open", "breakout", "three_short", "three_long",
+                              "b12_long", "nextday_long"):
+            entry_mode = "next_open"
+        direction = request.form.get("direction", "auto")
+        if direction not in ("short", "long"):
+            direction = None          # auto：依進場模式自動映射
+        daytrade_check = bool(request.form.get("daytrade_check"))
         raw = (request.form.get("symbols") or "").replace("，", ",").replace(" ", ",")
         symbols = [s.strip().upper() for s in raw.split(",") if s.strip()][:30]
-        cfg = {**strategy.DEFAULTS, "risk_budget": risk}
+        cfg = {**strategy.DEFAULTS, "risk_budget": risk,
+               "entry_mode": entry_mode, "direction": direction}
         run_id = _t.strftime("%Y%m%d-%H%M%S") + "-" + _uuid.uuid4().hex[:6]
         done, failed, errs, total_bars = [], [], [], 0
+        # 當沖/融券資格預檢（僅富邦來源；blocked → 跳過該標的）
+        if daytrade_check and src == "fubon" and symbols:
+            _dm = {"three_short": "short", "three_long": "long",
+                   "b12_long": "long", "nextday_long": "long"}
+            _chk_dir = direction or _dm.get(entry_mode, "short")
+            try:
+                import fubon_orders as fo_mod
+                _sdk, _acc = fo_mod.connect_sdk(fo_mod.fubon_cfg())
+                _kept = []
+                for _s in symbols:
+                    _v, _r, _gd = fo_mod.entry_gate(_sdk, _acc, _s, _chk_dir)
+                    if _v == "blocked":
+                        log.warning(f"⚠ 回測預檢：{_s} 不符合{_chk_dir}當沖資格"
+                                    f"（{_r}）→ 跳過")
+                        errs.append(f"{_s}: 資格不符({_r})")
+                    else:
+                        _kept.append(_s)
+                symbols = _kept
+            except Exception as _e:
+                log.warning(f"資格預檢失敗（全部照跑）：{str(_e)[:100]}")
         for sym in symbols:
             try:
                 if src == "fubon":
@@ -646,9 +675,21 @@ def backtest_page():
 <option value="yf">真實資料（yfinance 5 分K）</option>
 <option value="demo">合成資料（亂數走勢，管線驗證）</option></select>｜
 標的 <input name="symbols" size="72" value="{{ls_syms}}"
- placeholder="2330,2426,2454（逗號分隔多檔，可自行增刪）">｜
+ placeholder="2330,2426,2454（逗號分隔多檔，可自行增刪）"></p>
+<p>進場模式 <select name="entry_mode">
+<option value="next_open">next_open：長K後下一根開盤（原始模式）</option>
+<option value="breakout">breakout：突破觸發K高低點（逐字稿爆量）</option>
+<option value="three_short">three_short：進場三要素（做空）</option>
+<option value="three_long">three_long：進場三要素（做多）</option>
+<option value="b12_long">b12_long：B1/B2（做多）</option>
+<option value="nextday_long">nextday_long：隔日沖買進（做多跨日）</option></select>｜
+方向 <select name="direction">
+<option value="auto">自動（依進場模式）</option>
+<option value="short">做空</option>
+<option value="long">做多</option></select>｜
 單筆風險預算 <input name="risk_budget" value="0" size="8"> 元（0＝固定 1 張）｜
-<label><input type="checkbox" name="use_rules" checked> 套用核准規則</label></p>
+<label><input type="checkbox" name="use_rules" checked> 套用核准規則</label>｜
+<label><input type="checkbox" name="daytrade_check" checked> 當沖/融券資格預檢</label></p>
 {% if ls_syms %}<p class="muted">🧭 已預填多空分類清單（基準日 {{ls_date}}｜
 做空＋偏空，做空優先排序）— 來源：權證小哥 tw_stock.db，可自行增刪後執行。</p>{% endif %}
 <p>富邦模式：回溯天數 <input name="days_back" value="10" size="3">（需 .env 測試憑證）｜
