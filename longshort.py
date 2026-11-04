@@ -74,8 +74,15 @@ def load_longshort(date=None, labels=SHORT_LABELS, db_path=None):
                     r["tags"] = [t[0] for t in json.loads(r.pop("tags_json") or "[]")]
                 except Exception:
                     r["tags"] = []
-            rows.sort(key=lambda r: (r["bias_label"] != "做空",
-                                     r["bias_score"] if r["bias_score"] is not None else 0))
+            # 做空清單：做空組在前、分數越低（越空）越前
+            # 做多清單：做多組在前、分數越高（越多）越前
+            long_mode = labels and all(l in ("做多", "偏多") for l in labels)
+            first_label = labels[0] if labels else "做空"
+            rows.sort(key=lambda r: (
+                r["bias_label"] != first_label,
+                (-r["bias_score"] if long_mode else
+                 (r["bias_score"] if r["bias_score"] is not None else 0))
+                if r["bias_score"] is not None else 0))
         except Exception:
             rows = []
     if rows:

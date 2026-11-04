@@ -68,15 +68,25 @@ def fetch_yf(symbol, period="5d", log=None):
         if log:
             log.error("未安裝 yfinance：pip install yfinance")
         return []
-    cands = [symbol] if "." in symbol else [f"{symbol}.TW", f"{symbol}.TWO"]
+    try:
+        import ticker_db
+        cands = ticker_db.yf_candidates(symbol)   # 本地對照表→正確後綴優先
+    except Exception:
+        cands = [symbol] if "." in symbol else [f"{symbol}.TW", f"{symbol}.TWO"]
     df = used = None
     for s in cands:
-        try:
-            d = yf.download(s, period=period, interval="5m", progress=False, auto_adjust=False)
-        except Exception as e:
-            if log:
-                log.warning(f"yfinance {s} 下載失敗：{e}")
-            d = None
+        d = None
+        for attempt in range(2):    # Yahoo 偶發 Timeout/404 → 稍候重試一次
+            try:
+                d = yf.download(s, period=period, interval="5m", progress=False, auto_adjust=False)
+            except Exception as e:
+                if log:
+                    log.warning(f"yfinance {s} 下載失敗（第{attempt + 1}次）：{e}")
+                d = None
+            if d is not None and not d.empty:
+                break
+            if attempt == 0:
+                time.sleep(1.5)
         if d is not None and not d.empty:
             df, used = d, s
             break
@@ -172,8 +182,10 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
     # 模式→方向自動映射（進場三要素多空／B1B2 多／隔日沖多）
     _dm = {"three_short": "short", "three_long": "long",
            "b12_long": "long", "nextday_long": "long"}
-    if cfg.get("entry_mode") in _dm:
+    if cfg.get("entry_mode") in _dm and not cfg.get("direction"):
         cfg = {**cfg, "direction": _dm[cfg["entry_mode"]]}
+    if not cfg.get("direction"):
+        cfg = {**cfg, "direction": "short"}
     if cfg.get("entry_mode") == "nextday_long":
         # 隔日沖買進（跨日）：收盤篩選 → 隔日開盤出場
         trades = strategy.run_nextday_long(days, cfg, symbol, run_id, log)
@@ -363,6 +375,8 @@ def main():
     ap.add_argument("--ab-rules", action="store_true", help="A/B 比較：無規則 vs 套用核准規則")
     ap.add_argument("--min-vol-ratio", type=float, default=0.0,
                     help="觸發K最小量能比（1.5＝只做放量長黑，過濾縮量假跌破）")
+    ap.add_argument("--direction", choices=["short", "long"], default=None,
+                    help="原始模式方向（next_open/breakout 用；新模式自動判定）")
     ap.add_argument("--entry-mode",
                     choices=["next_open", "breakout", "three_short", "three_long",
                              "b12_long", "nextday_long"], default="next_open",
@@ -443,6 +457,7 @@ def main():
            "risk_budget": a.risk_budget, "lots": a.lots,
            "max_lot_risk": a.max_lot_risk, "min_vol_ratio": a.min_vol_ratio,
            "entry_mode": a.entry_mode, "market_bias_map": market_map,
+        "direction": a.direction,
            "fee_discount": a.fee_discount, "min_fee": a.min_fee, "tax_rate": a.tax_rate}
 
     if a.ab_rules:  # A/B：無規則 vs 套用核准規則（純模擬不入庫）

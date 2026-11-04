@@ -429,15 +429,18 @@ def live_page():
         _ls_date, _ls_rows = _ls.load_longshort()
         _ls_n_strong = sum(1 for r in _ls_rows if r["bias_label"] == "做空")
         _ls_n_weak = sum(1 for r in _ls_rows if r["bias_label"] == "偏空")
+        # 做多清單需另查（預設 labels 只回做空/偏空；直接從空方 rows 過濾永遠為空）
+        _ld_date, _ld_rows = _ls.load_longshort(labels=("做多", "偏多"))
+        _long_syms = ",".join(r["stock_no"] for r in _ld_rows)
     except Exception:
-        _ls_date, _ls_n_strong, _ls_n_weak = None, 0, 0
+        _ls_date, _ls_n_strong, _ls_n_weak, _long_syms = None, 0, 0, ""
     return page("""<h1>⚡ 盤中自動執行引擎（佛系當沖法）</h1>
 <div class="card"><h2>狀態</h2>
 <p>執行中：<b class="{{'pos' if st.running else 'muted'}}">{{'RUNNING' if st.running else 'STOPPED'}}</b>｜
 模式 <b>{{st.mode}}</b>（{{'只記錄，不送單' if st.mode=='dry' else '富邦沙箱送單'}}）｜
 行情來源 {{st.source}}｜時段限制 {{'開（平日 08:45–13:35）' if st.gate else '關（強制執行）'}}</p>
 <p>標的：{{ st.symbols|join(', ') if st.symbols else '（未設定）' }}｜
-風險預算 {{st.risk_budget}} 元｜週期 {{st.interval}} 秒｜
+方向 <b>{{st.direction}}</b>｜風險預算 {{st.risk_budget}} 元｜週期 {{st.interval}} 秒｜
 自動風控 {{'🛡 開（樣本≥' + st.auto_min_n|string + '）' if st.auto_risk else '關'}}</p>
 <p class="muted">啟動 {{st.started_at or '—'}}｜最後檢查 {{st.last_check or '—'}}｜
 已循環 {{st.cycles}} 次｜錯誤：{{st.last_error or '無'}}</p></div>
@@ -449,6 +452,9 @@ def live_page():
 <div class="card"><h2>控制</h2>
 <form method="post" action="{{ url_for('live_start') }}">
 標的 <input name="symbols" value="{{syms}}" size="22" placeholder="2330,2426">
+方向 <label><input type="radio" name="direction" value="short" checked>做空</label>
+<label><input type="radio" name="direction" value="long">做多</label>
+<label><input type="radio" name="direction" value="both">多空雙向</label>
 模式 <select name="mode"><option value="dry">dry 只記錄（零風險）</option>
 <option value="test">test 沙箱送單</option></select>
 來源 <select name="source"><option value="yf">yfinance（延遲15-20分）</option>
@@ -464,7 +470,8 @@ def live_page():
 <p class="muted">流程：5分K → 長黑K → 下一根開盤放空（test 模式自動送單）→ 移動停損 →
 13:20 時間出場 → 買回。出場一次即止。
 {% if _ls_date %}建議標的：🧭 多空分類清單（基準日 {{_ls_date}}｜做空 {{_ls_n_strong}} 檔＋偏空 {{_ls_n_weak}} 檔，
-做空優先）→ 無資料時後備：盤前清單／籌碼候選／掃描器推薦。{% else %}建議標的：{{syms}}（籌碼候選／掃描器推薦）。{% endif %}
+做空優先）→ 無資料時後備：盤前清單／籌碼候選／掃描器推薦。
+做多清單（方向選「做多」時複製上行）：<b>{{_long_syms}}</b>。{% else %}建議標的：{{syms}}（籌碼候選／掃描器推薦）。{% endif %}
 ⚠ 重啟 app 後引擎停止，需重新啟動。</p></div>
 {% if open_pos %}<div class="card"><h2>持倉監控（未平倉）</h2>
 <table><tr><th>標的</th><th>進場</th><th>進價</th><th>當前停損</th><th>張數</th><th>現價</th><th>浮動損益</th></tr>
@@ -480,7 +487,8 @@ def live_page():
 <p class="muted">本頁每 5 秒自動刷新</p></div>""",
                  st=st, syms=syms, open_pos=open_pos, refresh=5,
                  money=money, cls=cls, fmt=fmt,
-                 _ls_date=_ls_date, _ls_n_strong=_ls_n_strong, _ls_n_weak=_ls_n_weak)
+                 _ls_date=_ls_date, _ls_n_strong=_ls_n_strong, _ls_n_weak=_ls_n_weak,
+                 _long_syms=_long_syms)
 
 
 @app.route("/live/start", methods=["POST"])
@@ -489,6 +497,7 @@ def live_start():
                request.form.get("symbols", "").replace("，", ",").split(",") if s.strip()]
     mode = request.form.get("mode", "dry")
     source = request.form.get("source", "yf")
+    direction = request.form.get("direction", "short")
     risk = float(request.form.get("risk_budget", 0) or 0)
     interval = int(request.form.get("interval", 20) or 20)
     gate = bool(request.form.get("gate"))
@@ -497,9 +506,10 @@ def live_start():
     ok, msg = live_mod.engine.start(symbols, mode=mode, source=source,
                                     risk_budget=risk, lots=1,
                                     interval=interval, gate=gate,
-                                    auto_risk=auto_risk, auto_min_n=auto_min_n)
+                                    auto_risk=auto_risk, auto_min_n=auto_min_n,
+                                    direction=direction)
     log.info(f"網頁啟動自動執行：{msg}｜symbols={symbols} mode={mode} source={source} "
-             f"自動風控={auto_risk}(n≥{auto_min_n})")
+             f"方向={direction} 自動風控={auto_risk}(n≥{auto_min_n})")
     return redirect(url_for("live_page"))
 
 

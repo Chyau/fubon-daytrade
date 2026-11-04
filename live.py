@@ -52,7 +52,7 @@ class LiveEngine:
     # ---------- 對外控制 ----------
     def start(self, symbols, mode="dry", source="yf", risk_budget=0.0,
               lots=1, interval=20, gate=True, auto_risk=True,
-              auto_min_n=10, auto_gap=0.2):
+              auto_min_n=10, auto_gap=0.2, direction="short"):
         with self.lock:
             if self.state["running"]:
                 return False, "引擎已在執行中"
@@ -60,6 +60,8 @@ class LiveEngine:
                 return False, "請先設定標的"
             self.state.update({
                 "running": True, "mode": mode, "source": source,
+                "direction": direction if direction in ("short", "long", "both")
+                else "short",
                 "symbols": symbols, "risk_budget": float(risk_budget or 0),
                 "lots": max(1, int(lots or 1)),
                 "interval": max(5, int(interval or 20)), "gate": bool(gate),
@@ -88,7 +90,7 @@ class LiveEngine:
             self._stop.clear()
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
-            log.info(f"自動執行啟動：mode={mode} source={source} "
+            log.info(f"自動執行啟動：mode={mode} source={source} direction={direction} "
                      f"symbols={symbols} gate={gate} interval={interval}s")
             return True, "已啟動"
 
@@ -137,13 +139,18 @@ class LiveEngine:
                 entry = float(p["entry"])
                 exit_price = float(p["last"])
                 shares = int(p["lots"]) * 1000
-                gross = (entry - exit_price) * shares
+                direction = p.get("direction", "short")
+                if direction == "long":
+                    gross = (exit_price - entry) * shares
+                    tax = exit_price * shares * 0.0015   # 現股：稅在賣出（出場）腿
+                else:
+                    gross = (entry - exit_price) * shares
+                    tax = entry * shares * 0.0015        # 券賣：稅在進場（賣出）腿
                 fee_b = max(20, entry * shares * 0.001425 * 0.3)
                 fee_s = max(20, exit_price * shares * 0.001425 * 0.3)
-                tax = entry * shares * 0.0015   # 放空：券賣稅在進場（賣出）腿
                 net = round(gross - fee_b - fee_s - tax, 2)
                 trade = {
-                    "date": p["date"], "symbol": sym, "direction": "short",
+                    "date": p["date"], "symbol": sym, "direction": direction,
                     "trigger_time": p["entry_time"], "trigger_open": entry,
                     "entry_time": p["entry_time"], "entry_price": entry,
                     "initial_stop": p["stop"], "final_stop": p["stop"],
@@ -185,12 +192,33 @@ class LiveEngine:
         finally:
             conn.close()
         self.state["cycles"] += 1
+        direction = self.state.get("direction", "short")
         for sym in self.state["symbols"]:
             bars = self._fetch_today(sym)
             if not bars:
                 continue
             date = bars[0]["date"]
-            res = strategy.run_day(bars, cfg, sym, date, log=log, rules=rules)
+            if direction == "both":
+                # 多空雙向：兩套模擬都跑，取先觸發者（同根K不會同時長黑與長紅）
+                res_s = strategy.run_day(bars, {**cfg, "direction": "short"},
+                                         sym, date, log=log, rules=rules)
+                res_l = strategy.run_day(bars, {**cfg, "direction": "long"},
+                                         sym, date, log=log, rules=rules)
+                ts_, tl_ = res_s.get("trade"), res_l.get("trade")
+                if ts_ and tl_:
+                    res = (res_s if (ts_.get("entry_time") or "")
+                           <= (tl_.get("entry_time") or "") else res_l)
+                elif ts_:
+                    res = res_s
+                elif tl_:
+                    res = res_l
+                else:
+                    res = {"trade": None,
+                           "signals": list(res_s.get("signals") or [])
+                           + list(res_l.get("signals") or [])}
+            else:
+                res = strategy.run_day(bars, {**cfg, "direction": direction},
+                                       sym, date, log=log, rules=rules)
             self._handle(sym, date, res, bars)
 
     def _refresh_auto_rules(self, conn):
@@ -293,10 +321,13 @@ class LiveEngine:
         # 持倉監控摘要
         if t and t.get("exit_price") is None:
             last = bars[-1]
+            _d = t.get("direction", "short")
+            unreal = ((last["close"] - t["entry_price"]) if _d == "long"
+                      else (t["entry_price"] - last["close"])) * t["shares"]
             self.state["open_pos"][sym] = {
                 "date": date, "entry_time": t["entry_time"], "entry": t["entry_price"],
                 "stop": t["stop"], "lots": t["lots"], "last": last["close"],
-                "unreal": (t["entry_price"] - last["close"]) * t["shares"]}
+                "direction": _d, "unreal": unreal}
         else:
             self.state["open_pos"].pop(sym, None)
         self.state["last_check"] = datetime.now().strftime("%H:%M:%S")
@@ -360,14 +391,25 @@ class LiveEngine:
         return fo.fetch_intraday_bars(sdk, sym)
 
     def _fetch_yf(self, sym):
+        import time
         import yfinance as yf
-        cands = [sym] if "." in sym else [f"{sym}.TW", f"{sym}.TWO"]
+        try:
+            import ticker_db
+            cands = ticker_db.yf_candidates(sym)   # 本地對照表→正確後綴優先
+        except Exception:
+            cands = [sym] if "." in sym else [f"{sym}.TW", f"{sym}.TWO"]
         for s in cands:
-            try:
-                df = yf.download(s, period="1d", interval="5m",
-                                 progress=False, auto_adjust=False)
-            except Exception:
-                df = None
+            df = None
+            for attempt in range(2):    # Yahoo 偶發 Timeout → 稍候重試一次
+                try:
+                    df = yf.download(s, period="1d", interval="5m",
+                                     progress=False, auto_adjust=False)
+                except Exception:
+                    df = None
+                if df is not None and not df.empty:
+                    break
+                if attempt == 0:
+                    time.sleep(1.5)
             if df is None or df.empty:
                 continue
             if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
