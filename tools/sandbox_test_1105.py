@@ -6,9 +6,13 @@
 ＋ 清理所有 FSDT 委託/條件單
 """
 import io
+import os
 import sys
 sys.path.insert(0, r"C:\Users\Chyau\Documents\預設專案\fubon-daytrade")
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+# 本腳本設計上只在沙箱跑：強制鎖定（不受機器殘留環境變數影響）
+os.environ["FUBON_USE_TEST"] = "1"
 
 import time
 import fubon_orders as fo
