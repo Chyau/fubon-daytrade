@@ -481,6 +481,12 @@ def report():
         rows = q(f"SELECT * FROM trades WHERE 1=1{w_extra} ORDER BY id DESC LIMIT ?",
                  (*p_extra, f["limit"]))
     rep = bt.performance(rows) if rows else None
+    feat0 = {}
+    if rows:
+        try:
+            feat0 = _json.loads(rows[0]["features"] or "{}")
+        except Exception:
+            feat0 = {}
     po_s = pf_s = "—"
     e_calc = None
     if rep:
