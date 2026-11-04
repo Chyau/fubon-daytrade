@@ -450,21 +450,67 @@ def live_page():
 {% for r in st.auto_rules %}<div>• <b>{{r.name}}</b>｜{{r.evidence}}</div>{% endfor %}
 {% if not st.auto_rules %}<p class="muted">目前無符合門檻的坑點（樣本累積中）</p>{% endif %}</div>{% endif %}
 <div class="card"><h2>控制</h2>
+{% set _d = st.get('direction') or 'short' %}{% set _m = st.get('mode') or 'dry' %}{% set _s = st.get('source') or 'yf' %}
 <form method="post" action="{{ url_for('live_start') }}">
 標的 <input name="symbols" value="{{syms}}" size="22" placeholder="2330,2426">
-方向 <label><input type="radio" name="direction" value="short" checked>做空</label>
-<label><input type="radio" name="direction" value="long">做多</label>
-<label><input type="radio" name="direction" value="both">多空雙向</label>
-模式 <select name="mode"><option value="dry">dry 只記錄（零風險）</option>
-<option value="test">test 沙箱送單</option></select>
-來源 <select name="source"><option value="yf">yfinance（延遲15-20分）</option>
-<option value="fubon">富邦SDK即時</option></select>
-風險預算 <input name="risk_budget" value="5000" size="6"> 元
-週期s <input name="interval" value="20" size="3">
-<label><input type="checkbox" name="gate" checked> 僅交易時段</label>
-<label><input type="checkbox" name="auto_risk" checked> 🛡 自動風控</label>
-門檻n≥ <input name="auto_min_n" value="10" size="3">
+方向 <label><input type="radio" name="direction" value="short" {{'checked' if _d=='short'}}>做空</label>
+<label><input type="radio" name="direction" value="long" {{'checked' if _d=='long'}}>做多</label>
+<label><input type="radio" name="direction" value="both" {{'checked' if _d=='both'}}>多空雙向</label>
+模式 <select name="mode"><option value="dry" {{'selected' if _m=='dry'}}>dry 只記錄（零風險）</option>
+<option value="test" {{'selected' if _m=='test'}}>test 沙箱送單</option></select>
+來源 <select name="source"><option value="yf" {{'selected' if _s=='yf'}}>yfinance（延遲15-20分）</option>
+<option value="fubon" {{'selected' if _s=='fubon'}}>富邦SDK即時</option></select>
+風險預算 <input name="risk_budget" value="{{st.get('risk_budget') or 5000}}" size="6"> 元
+週期s <input name="interval" value="{{st.get('interval') or 20}}" size="3">
+<label><input type="checkbox" name="gate" {{'checked' if st.get('gate', True)}}> 僅交易時段</label>
+<label><input type="checkbox" name="auto_risk" {{'checked' if st.get('auto_risk', True)}}> 🛡 自動風控</label>
+門檻n≥ <input name="auto_min_n" value="{{st.get('auto_min_n') or 10}}" size="3">
 <button class="btn green">啟動</button></form>
+<script>
+/* 5 秒自動刷新會重載整頁→未按「啟動」的表單選擇會被清掉。
+   解法：任何變更立即存 localStorage；頁面載入時還原。 */
+(function(){
+  var SEL = 'input[name="symbols"], input[name="direction"], select[name="mode"], select[name="source"], input[name="risk_budget"], input[name="interval"], input[name="auto_min_n"], input[name="gate"], input[name="auto_risk"]';
+  function save(){
+    try{
+      var v = {};
+      var sy = document.querySelector('input[name="symbols"]');
+      if (sy) v.symbols = sy.value;
+      var r = document.querySelector('input[name="direction"]:checked');
+      if (r) v.direction = r.value;
+      ['mode','source'].forEach(function(n){
+        var e = document.querySelector('select[name="'+n+'"]'); if (e) v[n] = e.value;});
+      ['risk_budget','interval','auto_min_n'].forEach(function(n){
+        var e = document.querySelector('input[name="'+n+'"]'); if (e) v[n] = e.value;});
+      ['gate','auto_risk'].forEach(function(n){
+        var e = document.querySelector('input[name="'+n+'"]'); if (e) v[n] = e.checked;});
+      localStorage.setItem('fsdt_liveform', JSON.stringify(v));
+    }catch(err){}
+  }
+  function restore(){
+    try{
+      var v = JSON.parse(localStorage.getItem('fsdt_liveform')||'null');
+      if (!v) return;
+      var sy = document.querySelector('input[name="symbols"]');
+      if (sy && v.symbols) sy.value = v.symbols;
+      if (v.direction){
+        var r = document.querySelector('input[name="direction"][value="'+v.direction+'"]');
+        if (r) r.checked = true;
+      }
+      ['mode','source','risk_budget','interval','auto_min_n'].forEach(function(n){
+        var e = document.querySelector('[name="'+n+'"]');
+        if (e && v[n] !== undefined && v[n] !== '') e.value = v[n];});
+      ['gate','auto_risk'].forEach(function(n){
+        var e = document.querySelector('input[name="'+n+'"]');
+        if (e && v[n] !== undefined) e.checked = !!v[n];});
+    }catch(err){}
+  }
+  document.addEventListener('change', save);
+  window.addEventListener('beforeunload', save);
+  document.addEventListener('DOMContentLoaded', restore);
+  restore();
+})();
+</script>
 <form method="post" action="{{ url_for('live_stop') }}" style="margin-top:6px">
 <button class="btn red">停止引擎</button></form>
 <p class="muted">流程：5分K → 長黑K → 下一根開盤放空（test 模式自動送單）→ 移動停損 →
