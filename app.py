@@ -145,9 +145,9 @@ def equity_svg(w=920, h=170):
             f"<p class='muted'>累計淨損益 {money(vals[-1])} 元（{len(vals)} 筆交易）</p>")
 
 
-def compute_pits(min_n=4, gap=0.2):
+def compute_pits(min_n=4, gap=0.2, where="", params=()):
     rows = q("SELECT * FROM trades WHERE COALESCE(is_dup,0)=0 "
-             "AND run_id NOT LIKE 'DEMO%'")
+             "AND run_id NOT LIKE 'DEMO%'" + (where or ""), params)
     if not rows:
         return None, [], []
     base = sum(1 for r in rows if (r["net_pnl"] or 0) <= 0) / len(rows)
@@ -328,8 +328,12 @@ def index():
 
 @app.route("/trades")
 def trades():
-    rows = q("SELECT * FROM trades ORDER BY id DESC LIMIT 200")
-    return page("""<h1>📋 交易紀錄（{{rows|length}} 筆）</h1><div class="card">
+    f = _flt()
+    where, params = _trades_where(f)
+    rows = q(f"SELECT * FROM trades WHERE 1=1{where} "
+             "ORDER BY id DESC LIMIT ?", (*params, f["limit"]))
+    return page("""<h1>📋 交易紀錄（{{rows|length}} 筆）</h1>
+{{fbar|safe}}<div class="card">
 <table><tr><th>#</th><th>日期/標的</th><th>觸發</th><th>進場</th><th>停損軌跡</th><th>出場</th>
 <th>原因/標籤</th><th>淨損益</th><th>R</th></tr>
 {% for t in rows %}<tr><td>{{t.id}}</td>
@@ -338,7 +342,9 @@ def trades():
 <td class="muted">{{t.initial_stop}} → {{t.final_stop}}（{{t.stop_update_count}}）</td>
 <td>{{t.exit_time}}@{{t.exit_price}}</td><td>{{t.exit_reason}}<br><span class="muted">{{t.result_tag}}</span></td>
 <td class="{{cls(t.net_pnl)}}">{{money(t.net_pnl)}}</td><td>{{fmt(t.r_multiple, '.2f')}}</td></tr>{% endfor %}</table></div>""",
-                 rows=rows, money=money, cls=cls, fmt=fmt)
+                 rows=rows, fbar=_filter_bar(f, ["symbol", "d1", "d2", "direction",
+                                                 "tag", "exit", "pnl", "run_id", "limit"]),
+                 money=money, cls=cls, fmt=fmt)
 
 
 @app.route("/trades/<int:tid>")
@@ -378,8 +384,16 @@ def trade_detail(tid):
 @app.route("/report")
 def report():
     run_id = request.args.get("run_id")
-    rows = (q("SELECT * FROM trades WHERE run_id=?", (run_id,)) if run_id
-            else q("SELECT * FROM trades"))
+    f = _flt()
+    w_extra, p_extra = _trades_where(f, with_run=False)
+    runs = q("SELECT run_id, COUNT(*) n, MAX(id) mx FROM trades "
+             "GROUP BY run_id ORDER BY mx DESC LIMIT 25")
+    if run_id:
+        rows = q(f"SELECT * FROM trades WHERE run_id=?{w_extra} ORDER BY id DESC",
+                 (run_id, *p_extra))
+    else:
+        rows = q(f"SELECT * FROM trades WHERE 1=1{w_extra} ORDER BY id DESC LIMIT ?",
+                 (*p_extra, f["limit"]))
     rep = bt.performance(rows) if rows else None
     po_s = pf_s = "—"
     e_calc = None
@@ -389,6 +403,25 @@ def report():
         wr = rep["win_rate"] / 100
         e_calc = wr * rep["avg_win"] + (1 - wr) * rep["avg_loss"]
     return page("""<h1>📈 交易績效{% if run_id %}（run_id={{run_id}}）{% endif %}</h1>
+<div class="card"><form method="get" style="font-size:12px">
+run_id <select name="run_id">
+<option value="">全部彙總（最近 {{f.limit}} 筆）</option>
+{% for r in runs %}<option value="{{r.run_id}}" {{'selected' if run_id==r.run_id}}>{{r.run_id}}（{{r.n}} 筆）</option>{% endfor %}
+</select>
+標的 <input name="symbol" value="{{f.symbol}}" size="7">
+起 <input type="date" name="d1" value="{{f.d1}}">
+訖 <input type="date" name="d2" value="{{f.d2}}">
+標籤 <select name="tag"><option value="">全部</option>
+<option value="R_TRAIL_LOCK" {{'selected' if f.tag=='R_TRAIL_LOCK'}}>移動停利</option>
+<option value="R_STOP_REVERSAL" {{'selected' if f.tag=='R_STOP_REVERSAL'}}>停損反轉</option>
+<option value="R_TREND_RUN" {{'selected' if f.tag=='R_TREND_RUN'}}>趨勢行</option>
+<option value="R_GAP_AWAY" {{'selected' if f.tag=='R_GAP_AWAY'}}>跳空</option>
+<option value="R_FLAT_CHOP" {{'selected' if f.tag=='R_FLAT_CHOP'}}>盤整</option></select>
+盈虧 <select name="pnl"><option value="">全部</option>
+<option value="win" {{'selected' if f.pnl=='win'}}>賺</option>
+<option value="loss" {{'selected' if f.pnl=='loss'}}>賠</option></select>
+<button class="btn">套用</button>
+<a href="/report" class="muted">清除</a></form></div>
 {% if not rep %}<div class="card">
 {% if run_id %}<p>本次回測（run_id={{run_id}}）為 <b>0 筆交易</b>——該標的期間沒有出現符合定義的長黑K
 （寧可錯過，不要做錯）。可嘗試：換標的／放寬長黑K參數（CLI <code>--min-body-pct</code>）／改用其他資料源。</p>
@@ -415,7 +448,7 @@ def report():
 <td>{{t.exit_reason}}</td><td>{{t.result_tag}}</td>
 <td class="{{cls(t.net_pnl)}}">{{money(t.net_pnl)}}</td><td>{{fmt(t.r_multiple, '.2f')}}</td></tr>{% endfor %}</table></div>
 {% endif %}""", run_id=run_id, rep=rep, rows=rows, po_s=po_s, pf_s=pf_s,
-                 e_calc=e_calc, money=money, cls=cls, fmt=fmt)
+                 e_calc=e_calc, f=f, runs=runs, money=money, cls=cls, fmt=fmt)
 
 
 @app.route("/journal", methods=["GET", "POST"])
@@ -444,9 +477,12 @@ def journal_page():
     rules = [dict(r) for r in tdb.list_rules(conn)]
     conn.close()
     min_n = int(request.args.get("min_n", 4))
-    base, items, found = compute_pits(min_n=min_n)
+    f = _flt()
+    where, params = _trades_where(f, with_run=False)
+    base, items, found = compute_pits(min_n=min_n, where=where, params=params)
     return page("""<h1>🧠 學習迴路（記錄 → 挖坑 → 規則 → 引擎擋單）</h1>
-{% if base is not none %}<div class="card"><h2>坑點挖掘（全體虧損率 {{fmt(base*100, '.0f')}}%）</h2>
+{{fbar|safe}}
+{% if base is not none %}<div class="card"><h2>坑點挖掘（篩選範圍虧損率 {{fmt(base*100, '.0f')}}%）</h2>
 <table><tr><th>維度</th><th>分組</th><th>樣本</th><th>虧損率</th><th>avgR</th><th></th></tr>
 {% for i in items %}<tr class="{{'pit' if i.pit}}"><td>{{i.dim}}</td><td>{{i.key}}</td><td>{{i.n}}</td>
 <td>{{fmt(i.lr*100, '.0f')}}%（{{i.n_loss}}/{{i.n}}）</td>
@@ -474,6 +510,7 @@ def journal_page():
 <button class="btn">建立（未核准）</button></form>
 <p class="muted">可下維度：trigger_bucket（進場時段）/ weekday / symbol / body_pct_band（實體%）/ vol_ratio_band（量能比）/ pattern（K線型態）</p></div>""",
                  base=base, items=items, found=found, rules=rules, min_n=min_n,
+                 fbar=_filter_bar(f, ["symbol", "d1", "d2", "direction", "pnl"]),
                  money=money, cls=cls, fmt=fmt)
 
 
@@ -543,6 +580,17 @@ def live_page():
           for k, v in live_mod.engine.state.items()}
     syms = (",".join(st["symbols"]) if st["running"] else live_mod.suggest_symbols())
     open_pos = [{"symbol": k, **v} for k, v in st["open_pos"].items()]
+    # 事件流篩選（GET：ev_symbol / ev_kind / hide_stop）
+    ev_symbol = (request.args.get("ev_symbol") or "").strip().upper()
+    ev_kind = (request.args.get("ev_kind") or "").strip().upper()
+    hide_stop = bool(request.args.get("hide_stop"))
+    evs = list(st["events"])
+    if ev_symbol:
+        evs = [e for e in evs if ev_symbol in str(e.get("symbol", "")).upper()]
+    if ev_kind:
+        evs = [e for e in evs if ev_kind in str(e.get("kind", "")).upper()]
+    if hide_stop:
+        evs = [e for e in evs if e.get("kind") not in ("STOP_UPDATE",)]
     try:
         import longshort as _ls
         _ls_date, _ls_rows = _ls.load_longshort()
@@ -663,14 +711,29 @@ function fillSyms(k){
 <td><b>{{s.kind}}</b></td><td class="muted" style="font-size:11px">{{s.detail}}</td></tr>{% endfor %}</table>
 <p class="muted">TREND=順勢｜DIVERGE_BUY=內盤高但價漲（承接）｜DIVERGE_SELL=外盤高但價跌（出貨）</p></div>
 {% else %}<p class="muted">內外盤觀察未啟用（需富邦 SDK＋憑證登入；重啟 app 自動偵測）</p>{% endif %}
-<div class="card"><h2>即時事件流（最新 30 筆）</h2>
-{% if not st.events %}<p class="muted">尚無事件——引擎運行後，長黑K觸發／進場／停損下移／出場都會顯示於此並寫入資料庫</p>{% endif %}
+<div class="card"><h2>即時事件流（篩選後 {{evs|length}} 筆，顯示最新 30）</h2>
+<form method="get" style="font-size:12px;margin:4px 0">
+標的 <input name="ev_symbol" value="{{ev_symbol}}" size="6">
+事件 <select name="ev_kind"><option value="">全部</option>
+<option value="ENTRY" {{'selected' if ev_kind=='ENTRY'}}>ENTRY 進場</option>
+<option value="EXIT" {{'selected' if ev_kind=='EXIT'}}>EXIT 出場</option>
+<option value="ORDER" {{'selected' if ev_kind=='ORDER'}}>ORDER 下單</option>
+<option value="GATE_BLOCK" {{'selected' if ev_kind=='GATE_BLOCK'}}>GATE_BLOCK 擋單</option>
+<option value="OF_SIGNAL" {{'selected' if ev_kind=='OF_SIGNAL'}}>OF_SIGNAL 內外盤</option>
+<option value="BUDGET_SKIP" {{'selected' if ev_kind=='BUDGET_SKIP'}}>BUDGET_SKIP 超預算</option>
+<option value="TRIGGER_NO_ENTRY" {{'selected' if ev_kind=='TRIGGER_NO_ENTRY'}}>TRIGGER_NO_ENTRY 無觸發</option>
+<option value="AUTO_RULE" {{'selected' if ev_kind=='AUTO_RULE'}}>AUTO_RULE 風控</option></select>
+<label><input type="checkbox" name="hide_stop" value="1" {{'checked' if hide_stop}}> 隱藏 STOP_UPDATE</label>
+<button class="btn">套用</button>
+<a href="/live" class="muted">清除</a></form>
+{% if not evs %}<p class="muted">（無符合條件的事件）</p>{% endif %}
 <table><tr><th>時間</th><th>標的</th><th>事件</th><th>原因碼</th><th>詳情</th></tr>
-{% for e in st.events[:30] %}<tr><td>{{e.time}}</td><td>{{e.symbol}}</td>
+{% for e in evs[:30] %}<tr><td>{{e.time}}</td><td>{{e.symbol}}</td>
 <td>{{e.kind}}</td><td>{{e.reason}}</td>
 <td class="muted" style="font-size:11px">{{e.detail}}</td></tr>{% endfor %}</table>
 <p class="muted">本頁每 5 秒自動刷新</p></div>""",
-                 st=st, syms=syms, open_pos=open_pos, refresh=5,
+                 st=st, syms=syms, open_pos=open_pos, refresh=5, evs=evs,
+                 ev_symbol=ev_symbol, ev_kind=ev_kind, hide_stop=hide_stop,
                  money=money, cls=cls, fmt=fmt,
                  _ls_date=_ls_date, _ls_n_strong=_ls_n_strong, _ls_n_weak=_ls_n_weak,
                  _long_syms=_long_syms, _short_syms=_short_syms, _both_syms=_both_syms)
@@ -713,8 +776,25 @@ def live_stop():
 
 @app.route("/orders")
 def orders_page():
-    rows = q("SELECT * FROM orders ORDER BY id DESC LIMIT 100")
-    return page("""<h1>🧾 真實下單紀錄（{{rows|length}} 筆）</h1><div class="card">
+    f = _flt()
+    w, p = [], []
+    if f["symbol"]:
+        w.append("symbol LIKE ?")
+        p.append(f["symbol"] + "%")
+    if f["side"] in ("buy", "sell"):
+        w.append("side = ?")
+        p.append(f["side"])
+    if f["mode"] in ("dry", "test", "live"):
+        w.append("mode = ?")
+        p.append(f["mode"])
+    if f["ok"] in ("0", "1"):
+        w.append("is_success = ?")
+        p.append(int(f["ok"]))
+    where = (" AND " + " AND ".join(w)) if w else ""
+    rows = q(f"SELECT * FROM orders WHERE 1=1{where} "
+             "ORDER BY id DESC LIMIT ?", (*p, f["limit"]))
+    return page("""<h1>🧾 真實下單紀錄（{{rows|length}} 筆）</h1>
+{{fbar|safe}}<div class="card">
 {% if not rows %}<p class="muted">尚無下單紀錄（fubon_orders.py --send 送出後會記錄於此）</p>{% endif %}
 <table><tr><th>#</th><th>時間</th><th>環境</th><th>標的</th><th>方向</th><th>類型</th>
 <th>數量</th><th>價格</th><th>委託號</th><th>結果</th><th>訊息</th></tr>
@@ -723,7 +803,9 @@ def orders_page():
 <td>{{o.order_type}}</td><td>{{o.quantity}}</td><td>{{o.price or '市價'}}</td>
 <td>{{o.order_no or '—'}}</td>
 <td class="{{'pos' if o.is_success else 'neg'}}">{{'成功' if o.is_success else '失敗'}}</td>
-<td class="muted" style="font-size:11px">{{o.message}}</td></tr>{% endfor %}</table></div>""", rows=rows)
+<td class="muted" style="font-size:11px">{{o.message}}</td></tr>{% endfor %}</table></div>""",
+              rows=rows,
+              fbar=_filter_bar(f, ["symbol", "side", "mode", "ok", "limit"]))
 
 
 @app.route("/backtest", methods=["GET", "POST"])
