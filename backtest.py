@@ -380,10 +380,11 @@ def print_report(rep, trades, run_id, symbol):
     print(f"{'日期':<11}{'進':>6}{'出':>6}{'進價':>8}{'出價':>8} "
           f"{'出場原因':<13}{'結果標籤':<16}{'淨損益':>10}{'R':>7}")
     for t in sorted(trades, key=lambda x: (x["date"], x["exit_time"] or ""), reverse=True):
+        r_s = f"{t['r_multiple']:>7.2f}" if t["r_multiple"] is not None else "     —"
         print(f"{t['date']:<11}{t['entry_time']:>6}{t['exit_time'] or '':>6}"
               f"{t['entry_price']:>8}{t['exit_price'] or 0:>8} "
               f"{(t['exit_reason'] or ''):<13}{(t['result_tag'] or ''):<16}"
-              f"{t['net_pnl']:>10,.0f}{t['r_multiple']:>7.2f}")
+              f"{t['net_pnl']:>10,.0f}{r_s}")
 
 
 # ==================== CLI ====================

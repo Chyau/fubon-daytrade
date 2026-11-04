@@ -47,7 +47,11 @@ def connect():
 
 
 # ---------- 建構器 ----------
-def _stop_condition_order(symbol, qty, trigger):
+def _stop_condition_order(symbol, qty, trigger, use_market=True):
+    """停損買回條件單建構。
+    use_market=True：觸發後「市價」買進 → 跳空穿越也保證出場（修 X_STOP_GAP 根因：
+    舊限價版 price=trigger，跳空時限價不成交 → 部位裸奔到時間出場，實測單筆 -89K）。
+    use_market=False：限價=觸發價（後備；某些環境可能拒收市價條件單）。"""
     _check_import()
     condition = Condition(
         market_type=TradingType.Reference,
@@ -58,10 +62,11 @@ def _stop_condition_order(symbol, qty, trigger):
     order = ConditionOrder(
         buy_sell=BSAction.Buy,
         symbol=symbol,
-        price=str(trigger),
+        price="" if use_market else str(trigger),
         quantity=int(qty),
         market_type=ConditionMarketType.Common,
-        price_type=ConditionPriceType.Limit,
+        price_type=ConditionPriceType.Market if use_market
+        else ConditionPriceType.Limit,
         time_in_force=TimeInForce.ROD,
         order_type=ConditionOrderType.Stock)
     return condition, order
@@ -89,18 +94,32 @@ def _entry_condition_order(symbol, qty, trigger, side, cmp_op):
 
 # ---------- 動作 ----------
 def place_stop(sdk, acc, symbol, qty, trigger, log=None):
-    """停損買回條件單：股價 > trigger → 現股限價買進（當日有效，未觸發自動失效）"""
+    """停損買回條件單：股價 > trigger → 現股「市價」買進（當日有效，未觸發自動失效）。
+    市價版被拒時自動退回限價版（舊行為；限價在跳空時可能不成交 → X_STOP_GAP 風險）。"""
     _check_import()
     from datetime import date as _d
     today = _d.today().strftime("%Y%m%d")
-    condition, order = _stop_condition_order(symbol, qty, trigger)
+    condition, order = _stop_condition_order(symbol, qty, trigger, use_market=True)
     res = sdk.stock.single_condition(acc, today, today, StopSign.Full, condition, order)
+    ok = bool(res.is_success) if hasattr(res, "is_success") else True
+    if not ok:
+        # 後備：市價條件單被拒（部分環境不支援）→ 限價版重試
+        if log:
+            log.warning(f"市價停損條件單被拒（{fo_mod_dig(res)}）→ 退回限價版")
+        condition, order = _stop_condition_order(symbol, qty, trigger, use_market=False)
+        res = sdk.stock.single_condition(acc, today, today, StopSign.Full, condition, order)
+        ok = bool(res.is_success) if hasattr(res, "is_success") else True
     guid = (res.data.guid if getattr(res, "data", None) and hasattr(res.data, "guid")
             else None)
-    ok = bool(res.is_success) if hasattr(res, "is_success") else True
     if log:
         log.info(f"停損條件單 {symbol} trigger={trigger} qty={qty} guid={guid} ok={ok}")
     return res, guid, ok
+
+
+def fo_mod_dig(res):
+    """取出錯誤訊息（避免循環 import 的輕量 dig）"""
+    m = getattr(res, "message", None)
+    return str(m)[:80] if m else "（無訊息）"
 
 
 def place_entry_daytrade(sdk, acc, symbol, qty, trigger, side="sell", cmp_op="gt",
