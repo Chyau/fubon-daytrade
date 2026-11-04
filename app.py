@@ -918,7 +918,7 @@ def backtest_page():
         use_rules = bool(request.form.get("use_rules", "on"))
         entry_mode = request.form.get("entry_mode", "next_open")
         if entry_mode not in ("next_open", "breakout", "three_short", "three_long",
-                              "b12_long", "nextday_long"):
+                              "b12_long", "nextday_long", "redpacket"):
             entry_mode = "next_open"
         days_back = max(1, min(180, int(request.form.get("days_back", 60) or 60)))
         # 隔日沖需要 20 日布林 → 歷史自動加長（<21 交易日時布林不成立、全 0 筆）
@@ -934,6 +934,8 @@ def backtest_page():
         symbols = [s.strip().upper() for s in raw.split(",") if s.strip()][:30]
         cfg = {**strategy.DEFAULTS, "risk_budget": risk,
                "entry_mode": entry_mode, "direction": direction}
+        if entry_mode == "redpacket":
+            cfg["min_lot_risk"] = 150   # 紅包法緊停損（影片案例風險約150/張），一般下限600不適用
         # 大盤方向地圖（坑點維度 market_dir；失敗留白）
         try:
             _mmap = bt.fetch_market_map()
@@ -1028,7 +1030,8 @@ def backtest_page():
 <option value="three_short">three_short：進場三要素（做空）</option>
 <option value="three_long">three_long：進場三要素（做多）</option>
 <option value="b12_long">b12_long：B1/B2（做多）</option>
-<option value="nextday_long">nextday_long：隔日沖買進（做多跨日）</option></select>｜
+<option value="nextday_long">nextday_long：隔日沖買進（做多跨日）</option>
+<option value="redpacket">redpacket：紅包法（放量破底做空）</option></select>｜
 方向 <select name="direction">
 <option value="auto">自動（依進場模式）</option>
 <option value="short">做空</option>

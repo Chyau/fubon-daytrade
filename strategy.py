@@ -48,6 +48,7 @@ DEFAULTS = {
     "risk_budget": 0.0,      # 單筆最大虧損預算（元）→ 張數 = 預算 ÷ 單張風險
     "max_lot_risk": 0.0,     # 單張風險上限（元）：超過則跳過進場（0＝不設限；直擊高價股大賠根因）
     "min_lot_risk": 600,     # 單張風險下限（元）：低價股停損 1-2 ticks → 風險低於進出成本，贏也白贏（2883/1605 實測）
+    "rp_vol_ratio": 0.5,     # 紅包法：低點以來區間量 ÷ 當日迄今量 的門檻（0.5＝主力出貨過半）
     "min_vol_ratio": 0.0,    # 觸發K最小量能比（0＝不過濾；1.5＝只做放量長黑，實測擋掉 91% 假跌破虧損）
     "entry_mode": "next_open",  # next_open＝長黑K後下一根開盤進場（逐字稿1）／breakout＝等突破觸發K高低點進場（逐字稿2爆量技巧）
     "market_bias_map": None,  # {日期: "up"/"down"} 大盤風向過濾：逆風日跳過進場（None＝不過濾）
@@ -288,6 +289,9 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
     cfg = {**DEFAULTS, **(cfg or {})}
     if cfg.get("entry_mode") == "b12_long":
         return run_day_b12(day_bars, cfg, symbol, date_str, log=log, rules=rules)
+    if cfg.get("entry_mode") == "redpacket":
+        return run_day_redpacket(day_bars, cfg, symbol, date_str,
+                                 log=log, rules=rules)
     day_bars = sorted(day_bars, key=lambda x: x["hhmm"])
     signals = []
     prev_bodies, prev_vols, prev_raw = [], [], []
@@ -627,7 +631,159 @@ def detect_three(b, prev_raw, cfg, direction):
                   "pattern": "TE止跌", "fib_zone": [round(zl, 2), round(zh, 2)]}
 
 
-# ==================== B1/B2 開盤兩買點（逐字稿：當沖兩買點） ====================
+# ==================== 紅包當沖法（逐字稿：低點整理＋區間放量破底） ====================
+def run_day_redpacket(day_bars, cfg, symbol, date_str, log=None, rules=None):
+    """紅包法（小王子逐字稿）：① 開盤前段確立「原低點」（rp_low_bars 根的最低）
+    ② 反彈震盪區間成交量累積 ≥ 當日迄今量 × rp_vol_ratio（0.5＝主力出貨過半）
+    ③ 股價跌破原低點 → 放空。
+    停損：回升破「原低點」上方（破底翻＝主力撐盤，影片強調立刻停損）；
+    出場：止跌偵測（收盤 ≥ 前收＝下跌速度變慢）→ 當根收盤買回（X_STALL，快進快出）；
+    13:20 時間出場；移動停損跟隨低點下移鎖利。一天一筆。"""
+    cfg = {**DEFAULTS, **(cfg or {})}
+    day_bars = sorted(day_bars, key=lambda x: x["hhmm"])
+    signals = []
+    t = None
+    low_bars = int(cfg.get("rp_low_bars", 3))
+    day_low = None
+    vol_since_low = 0.0
+    cum_vol = 0.0
+    prev_close = None
+    fired = False
+
+    def add_event(kind, reason, bar, detail):
+        t["events"].append({"ts": f"{date_str} {bar['hhmm']}", "event": kind,
+                            "reason": reason,
+                            "detail": json.dumps(detail, ensure_ascii=False)})
+
+    for i, b in enumerate(day_bars):
+        o, h, l, c = (float(b["open"]), float(b["high"]),
+                      float(b["low"]), float(b["close"]))
+        v = float(b.get("volume", 0) or 0)
+        cum_vol += v
+
+        if t is not None:
+            t["bars_held"] += 1
+            if h > t["stop"]:
+                _close(t, b["hhmm"], round(t["stop"], 2), "X_STOP_TOUCH",
+                       cfg, date_str, log)
+                return {"trade": t, "signals": signals}
+            if prev_close is not None and c >= prev_close:
+                _close(t, b["hhmm"], c, "X_STALL", cfg, date_str, log)
+                return {"trade": t, "signals": signals}
+            if b["hhmm"] >= cfg["force_exit"]:
+                _close(t, b["hhmm"], c, "X_TIME_1320", cfg, date_str, log)
+                return {"trade": t, "signals": signals}
+            new_stop = round(l, 2)
+            if new_stop < t["stop"]:
+                t["stop"] = new_stop
+                t["stop_update_count"] += 1
+                t["stop_updates"].append((b["hhmm"], t["stop"]))
+                add_event("STOP_UPDATE", "S_STOP_UPDATE", b, {"new_stop": t["stop"]})
+            prev_close = c
+            continue
+
+        if fired:
+            prev_close = c
+            continue
+
+        if i < low_bars:
+            day_low = l if day_low is None else min(day_low, l)
+            prev_close = c
+            continue
+
+        if l < day_low:
+            need = cum_vol * float(cfg.get("rp_vol_ratio", 0.5))
+            enough = vol_since_low >= need
+            ctx = {"symbol": symbol, "weekday": weekday_of(date_str),
+                   "trigger_bucket": trigger_bucket(b["hhmm"])}
+            blk = blocked_by_rules(rules or [], ctx)
+            mb = (cfg.get("market_bias_map") or {}).get(date_str)
+            if not enough:
+                signals.append({"date": date_str, "symbol": symbol,
+                                "ts": f"{date_str} {b['hhmm']}", "event": "RP_WEAK",
+                                "reason": "E_RP_WEAK_VOLUME",
+                                "detail": json.dumps(
+                                    {"vol_since_low": vol_since_low, "need": need},
+                                    ensure_ascii=False)})
+                prev_close = c
+                continue
+            if blk:
+                signals.append({"date": date_str, "symbol": symbol,
+                                "ts": f"{date_str} {b['hhmm']}", "event": "RULE_BLOCK",
+                                "reason": "E_RULE_BLOCK",
+                                "detail": json.dumps({"rule": blk["name"]},
+                                                     ensure_ascii=False)})
+                prev_close = c
+                continue
+            if mb and mb == "up":
+                signals.append({"date": date_str, "symbol": symbol,
+                                "ts": f"{date_str} {b['hhmm']}",
+                                "event": "MARKET_FILTER", "reason": "E_MARKET_FILTER",
+                                "detail": json.dumps({"market_bias": mb},
+                                                     ensure_ascii=False)})
+                prev_close = c
+                continue
+            entry = c
+            stop = round(day_low + tick_size(entry), 2)
+            per_lot = (abs(entry - stop) + tick_size(entry)) * 1000
+            if cfg.get("min_lot_risk", 0) > 0 and per_lot < cfg["min_lot_risk"]:
+                signals.append({"date": date_str, "symbol": symbol,
+                                "ts": f"{date_str} {b['hhmm']}",
+                                "event": "RISK_SKIP", "reason": "E_RISK_TOO_SMALL",
+                                "detail": json.dumps({"per_lot_risk": per_lot},
+                                                     ensure_ascii=False)})
+                fired = True
+                prev_close = c
+                continue
+            if cfg.get("risk_budget", 0) > 0 and per_lot > cfg["risk_budget"]:
+                signals.append({"date": date_str, "symbol": symbol,
+                                "ts": f"{date_str} {b['hhmm']}",
+                                "event": "BUDGET_SKIP", "reason": "E_RISK_BUDGET",
+                                "detail": json.dumps({"per_lot_risk": per_lot},
+                                                     ensure_ascii=False)})
+                fired = True
+                prev_close = c
+                continue
+            lots = (max(1, min(int(cfg["risk_budget"] // per_lot),
+                               int(cfg.get("max_lots", 10))))
+                    if cfg.get("risk_budget", 0) > 0
+                    else max(1, int(cfg.get("lots", 1))))
+            feat = {"pattern": "RP破底", "day_low": day_low,
+                    "vol_since_low": vol_since_low,
+                    "weekday": weekday_of(date_str),
+                    "trigger_bucket": trigger_bucket(b["hhmm"])}
+            t = {"date": date_str, "symbol": symbol, "direction": "short",
+                 "trigger_time": b["hhmm"], "trigger_open": day_low,
+                 "entry_time": b["hhmm"], "entry_price": entry,
+                 "initial_stop": stop, "final_stop": stop,
+                 "stop_update_count": 0,
+                 "exit_time": None, "exit_reason": None, "exit_price": None,
+                 "lots": lots, "shares": lots * 1000,
+                 "gross_pnl": None, "fees": None, "tax": None, "net_pnl": None,
+                 "risk_per_share": round(abs(entry - stop), 3),
+                 "r_multiple": None, "bars_held": 1,
+                 "entry_reason": "E_RP", "exit_reason": None, "result_tag": None,
+                 "features": json.dumps(feat, ensure_ascii=False),
+                 "events": [], "stop_updates": [], "stop": stop}
+            add_event("ENTRY", "E_RP_SHORT", b,
+                      {"entry": entry, "stop": stop, "lots": lots,
+                       "vol_since_low": vol_since_low})
+            if log:
+                log.info(f"[{date_str}] {symbol} 紅包法放空 {entry} @ {b['hhmm']}"
+                         f"｜停損 {stop}｜區間量 {vol_since_low:,.0f}/{need:,.0f}")
+            fired = True
+            prev_close = c
+            continue
+
+        vol_since_low += v
+        prev_close = c
+
+    if t is not None and t["exit_price"] is None and cfg.get("eod_exit", True):
+        last = day_bars[-1]
+        _close(t, last["hhmm"], float(last["close"]), "X_EOD", cfg, date_str, log)
+    return {"trade": t, "signals": signals}
+
+
 def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
     """B1＝開盤後拉回（跌破開盤價）再重新突破開盤價 → 買進。
     出場：跌破起漲點（結構低點）全賣（一底比一底高 → 起漲點上移）；13:20 時間出場。

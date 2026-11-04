@@ -60,6 +60,7 @@ DIMS = {
     "market_dir": lambda t: {"up": "大盤漲", "down": "大盤跌"}.get(
         _feat(t).get("market_dir"), "?"),
     "gap_band": _gap_band,
+    "month": lambda t: (t["date"] or "")[5:7] + "月" or "?",
     "symbol": lambda t: t["symbol"],
     "exit_reason": lambda t: t["exit_reason"] or "?",
     "result_tag": lambda t: t["result_tag"] or "?",
