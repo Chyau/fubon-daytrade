@@ -261,11 +261,13 @@ def _flt():
             "side": (g.get("side") or "").strip(),
             "mode": (g.get("mode") or "").strip(),
             "ok": (g.get("ok") or "").strip(),
+            "dup": (g.get("dup") or "").strip(),
             "limit": limit}
 
 
-def _trades_where(f, with_run=True):
-    """交易篩選 → (WHERE 子句, 參數)。f 來自 _flt()"""
+def _trades_where(f, with_run=True, hide_dup=None):
+    """交易篩選 → (WHERE 子句, 參數)。f 來自 _flt()。
+    hide_dup：None=依 f["dup"]（預設隱藏 is_dup）；False=不隱藏（run 專屬報告用）"""
     w, p = [], []
     if f.get("symbol"):
         w.append("symbol LIKE ?")
@@ -292,6 +294,10 @@ def _trades_where(f, with_run=True):
     if with_run and f.get("run_id"):
         w.append("run_id LIKE ?")
         p.append(f["run_id"] + "%")
+    if hide_dup is None:
+        hide_dup = f.get("dup") != "show"
+    if hide_dup:
+        w.append("COALESCE(is_dup,0)=0")
     return (" AND " + " AND ".join(w)) if w else "", p
 
 
@@ -337,6 +343,10 @@ def _filter_bar(f, fields, action=""):
                                      f["ok"]))
         elif k == "limit":
             out.append(f'筆數 {inp("limit", "200", 5, f["limit"])}')
+        elif k == "dup":
+            ck = " checked" if f.get("dup") == "show" else ""
+            out.append(f'<label><input type="checkbox" name="dup" value="show"{ck}> '
+                       f'含重複紀錄</label>')
     out.append('<button class="btn">套用篩選</button> '
                f'<a href="{action or request.path}" class="muted">清除</a></form></div>')
     return "".join(out)
@@ -398,7 +408,12 @@ def trades():
     where, params = _trades_where(f)
     rows = q(f"SELECT * FROM trades WHERE 1=1{where} "
              "ORDER BY id DESC LIMIT ?", (*params, f["limit"]))
-    return page("""<h1>📋 交易紀錄（{{rows|length}} 筆）</h1>
+    hid = 0
+    if f["dup"] != "show":
+        w2, p2 = _trades_where(f, hide_dup=False)
+        hid = q(f"SELECT COUNT(*) c FROM trades WHERE 1=1{w2}", p2)[0]["c"] - len(rows)
+    hid_note = f"｜已隱藏重複 {hid} 筆" if hid > 0 else ""
+    return page("""<h1>📋 交易紀錄（{{rows|length}} 筆{{hid_note}}）</h1>
 {{fbar|safe}}<div class="card">
 <table><tr><th>#</th><th>日期/標的</th><th>觸發</th><th>進場</th><th>停損軌跡</th><th>出場</th>
 <th>原因/標籤</th><th>淨損益</th><th>R</th></tr>
@@ -409,7 +424,9 @@ def trades():
 <td>{{t.exit_time}}@{{t.exit_price}}</td><td>{{t.exit_reason}}<br><span class="muted">{{t.result_tag}}</span></td>
 <td class="{{cls(t.net_pnl)}}">{{money(t.net_pnl)}}</td><td>{{fmt(t.r_multiple, '.2f')}}</td></tr>{% endfor %}</table></div>""",
                  rows=rows, fbar=_filter_bar(f, ["symbol", "d1", "d2", "direction",
-                                                 "tag", "exit", "pnl", "run_id", "limit"]),
+                                                 "tag", "exit", "pnl", "run_id",
+                                                 "dup", "limit"]),
+                 hid_note=hid_note,
                  money=money, cls=cls, fmt=fmt)
 
 
@@ -455,9 +472,12 @@ def report():
     runs = q("SELECT run_id, COUNT(*) n, MAX(id) mx FROM trades "
              "GROUP BY run_id ORDER BY mx DESC LIMIT 25")
     if run_id:
+        # run 專屬報告：保持該 run 完整（不隱藏 is_dup，除非明確勾選含重複以外…即預設顯示）
+        w_extra, p_extra = _trades_where(f, with_run=False, hide_dup=False)
         rows = q(f"SELECT * FROM trades WHERE run_id=?{w_extra} ORDER BY id DESC",
                  (run_id, *p_extra))
     else:
+        w_extra, p_extra = _trades_where(f, with_run=False)
         rows = q(f"SELECT * FROM trades WHERE 1=1{w_extra} ORDER BY id DESC LIMIT ?",
                  (*p_extra, f["limit"]))
     rep = bt.performance(rows) if rows else None
@@ -486,6 +506,7 @@ run_id <select name="run_id">
 盈虧 <select name="pnl"><option value="">全部</option>
 <option value="win" {{'selected' if f.pnl=='win'}}>賺</option>
 <option value="loss" {{'selected' if f.pnl=='loss'}}>賠</option></select>
+{% if not run_id %}<label><input type="checkbox" name="dup" value="show" {{'checked' if f.dup=='show'}}> 含重複紀錄</label>{% endif %}
 <button class="btn">套用</button>
 <a href="/report" class="muted">清除</a></form></div>
 {% if not rep %}<div class="card">
