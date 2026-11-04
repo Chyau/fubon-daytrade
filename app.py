@@ -42,37 +42,74 @@ HOST = os.environ.get("HOST", "127.0.0.1")  # VPS 部署設 HOST=0.0.0.0（搭�
 # ==================== 樣式與版型 ====================
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:"Microsoft JhengHei",Consolas,monospace;background:#0b1220;color:#e2e8f0;padding:18px}
-.wrap{max-width:980px;margin:0 auto}
-.nav{max-width:980px;margin:0 auto 16px;display:flex;gap:6px;flex-wrap:wrap}
-.nav a{padding:7px 14px;border-radius:8px;background:#16213a;color:#94a3b8;text-decoration:none;font-size:13px}
+body{font-family:"Microsoft JhengHei","PingFang TC",system-ui,Consolas,monospace;
+     background:radial-gradient(1100px 500px at 85% -10%,#16234a 0%,#0b1220 55%) fixed #0b1220;
+     color:#e2e8f0;padding:18px;font-size:14px}
+.wrap{max-width:1080px;margin:0 auto}
+.nav{position:sticky;top:10px;z-index:50;max-width:1080px;margin:0 auto 18px;display:flex;
+     gap:4px;flex-wrap:wrap;padding:9px 11px;background:rgba(13,20,38,.9);
+     backdrop-filter:blur(8px);border:1px solid #1e293b;border-radius:14px}
+.nav a{padding:7px 13px;border-radius:9px;background:transparent;color:#94a3b8;
+       text-decoration:none;font-size:13px;transition:.15s}
 .nav a:hover{background:#1e2c4f;color:#e2e8f0}
-h1{font-size:20px;margin-bottom:14px;color:#f8fafc}
-h2{font-size:15px;margin:14px 0 8px;color:#93c5fd}
-.card{background:#111a2e;border:1px solid #1e293b;border-radius:12px;padding:14px 16px;margin-bottom:14px}
-.card p{margin:4px 0}
-.kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:14px}
-.kpi{background:#111a2e;border:1px solid #1e293b;border-radius:12px;padding:12px;text-align:center}
+.nav a.on{background:linear-gradient(135deg,#2563eb,#3b82f6);color:#fff;font-weight:700}
+h1{font-size:21px;margin-bottom:16px;color:#f8fafc;letter-spacing:.5px;
+   border-bottom:1px solid #1e293b;padding-bottom:10px}
+h2{font-size:15px;margin:14px 0 8px;color:#7dd3fc}
+.card{background:linear-gradient(180deg,#121c33,#0f1830);border:1px solid #1e293b;
+      border-radius:14px;padding:15px 17px;margin-bottom:16px;
+      box-shadow:0 4px 18px rgba(0,0,0,.28)}
+.card p{margin:5px 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:linear-gradient(180deg,#131f3a,#101a30);border:1px solid #23345c;
+     border-radius:12px;padding:13px 8px;text-align:center;transition:.15s}
+.kpi:hover{transform:translateY(-2px);border-color:#3b82f6}
 .kpi .l{font-size:11px;color:#64748b}
 .kpi .v{font-size:17px;font-weight:700;margin-top:4px}
+.tw{overflow-x:auto;border-radius:10px}
+.tw table{min-width:max-content}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{color:#64748b;text-align:left;padding:6px 8px;border-bottom:1px solid #1e293b;font-weight:600}
-td{padding:6px 8px;border-bottom:1px solid #16203a;vertical-align:top}
+th{position:sticky;top:0;color:#7dd3fc;text-align:left;padding:8px 9px;
+   border-bottom:1px solid #24365f;font-weight:700;white-space:nowrap;
+   background:#0f1830;z-index:2}
+td{padding:7px 9px;border-bottom:1px solid #16203a;vertical-align:top;white-space:nowrap}
+tr:nth-child(even) td{background:rgba(255,255,255,.015)}
 tr:hover td{background:#14203b}
 a{color:#93c5fd;text-decoration:none}
+a:hover{text-decoration:underline}
 .muted{color:#64748b;font-size:12px}
 .pos{color:#22c55e}.neg{color:#ef4444}
 .pit{background:#2a1215;border:1px solid #7f1d1d;border-radius:8px}
-.btn{display:inline-block;padding:6px 14px;border-radius:8px;background:#2563eb;color:#fff;
-     text-decoration:none;font-size:13px;border:0;cursor:pointer}
-.btn.gray{background:#334155}.btn.red{background:#b91c1c}.btn.green{background:#15803d}
-input,select{background:#16213a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px}
-code{background:#16213a;padding:2px 6px;border-radius:5px;font-size:12px;color:#93c5fd}
+.btn{display:inline-block;padding:7px 15px;border-radius:9px;
+     background:linear-gradient(135deg,#2563eb,#3b82f6);color:#fff;
+     text-decoration:none;font-size:13px;border:0;cursor:pointer;
+     transition:.15s;font-weight:600}
+.btn:hover{filter:brightness(1.18)}
+.btn.gray{background:linear-gradient(135deg,#334155,#475569)}
+.btn.red{background:linear-gradient(135deg,#b91c1c,#dc2626)}
+.btn.green{background:linear-gradient(135deg,#15803d,#16a34a)}
+input,select{background:#16213a;color:#e2e8f0;border:1px solid #334155;
+             border-radius:7px;padding:6px 10px;font-size:13px}
+input:focus,select:focus{outline:none;border-color:#3b82f6;
+                         box-shadow:0 0 0 2px rgba(59,130,246,.25)}
+input[type=checkbox]{accent-color:#3b82f6;background:transparent;border:0;
+                     padding:0;vertical-align:middle;width:auto}
+code{background:#16213a;padding:2px 7px;border-radius:6px;font-size:12px;color:#93c5fd}
+.bdg{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;
+     font-weight:700;white-space:nowrap}
+.bdg.g{background:#052e16;color:#4ade80;border:1px solid #14532d}
+.bdg.r{background:#2a1215;color:#f87171;border:1px solid #7f1d1d}
+.bdg.b{background:#0c1f45;color:#60a5fa;border:1px solid #1e3a8a}
+.bdg.o{background:#2a1a05;color:#fbbf24;border:1px solid #78350f}
+.bdg.s{background:#1c2432;color:#94a3b8;border:1px solid #334155}
+.bdg.p{background:#1e1033;color:#c084fc;border:1px solid #5b21b6}
 .manual{line-height:1.75;font-size:14px}
 .manual h2{margin-top:18px}.manual h3{margin-top:12px;color:#a5b4fc}
 .manual table{margin:8px 0}.manual th,.manual td{border:1px solid #1e293b}
 .manual ul,.manual ol{margin:6px 0 6px 22px}
 .manual li{margin:3px 0}
+@media(max-width:720px){body{padding:10px}.card{padding:12px}
+  .nav{position:static}}
 """
 BASE = """<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -88,7 +125,36 @@ BASE = """<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8">
   <a href="{{ url_for('orders_page') }}">🧾 下單紀錄</a>
   <a href="{{ url_for('backtest_page') }}">⏱ 回測</a>
   <a href="{{ url_for('help_page') }}">📖 手冊</a>
-</div><div class="wrap">{{ content|safe }}</div></body></html>"""
+</div><div class="wrap">{{ content|safe }}</div>
+<script>
+/* 導覽列：目前頁高亮 */
+document.querySelectorAll('.nav a').forEach(function(a){
+  if (a.getAttribute('href') === location.pathname) a.classList.add('on');
+});
+/* 寬表格自動包橫向捲軸容器（不切字、不撐破卡片） */
+document.querySelectorAll('.card').forEach(function(c){
+  var t = c.querySelector('table');
+  if (t && t.scrollWidth > c.clientWidth - 6){
+    var w = document.createElement('div'); w.className = 'tw';
+    t.parentNode.insertBefore(w, t); w.appendChild(t);
+  }
+});
+/* 結果標籤 / 原因碼 / 事件種類 → 徽章上色 */
+var K = [['TRAIL','g'],['REVERSAL','r'],['TREND','b'],['GAP','o'],['FLAT','s'],
+         ['ENTRY','g'],['EXIT','r'],['ORDER_FAIL','r'],['ORDER','b'],
+         ['GATE_BLOCK','r'],['OF_SIGNAL','p'],['AUTO_RULE','b'],
+         ['BUDGET_SKIP','o'],['TRIGGER','s'],['STOP_UPDATE','s']];
+document.querySelectorAll('table td').forEach(function(td){
+  var t = (td.textContent || '').trim();
+  if (!/^[RXES]_[A-Z0-9_]+$/.test(t) &&
+      !/^(ENTRY|EXIT)$/.test(t)) return;
+  var cls = 's';
+  for (var i = 0; i < K.length; i++){
+    if (t.indexOf(K[i][0]) >= 0){ cls = K[i][1]; break; }
+  }
+  td.innerHTML = '<span class="bdg ' + cls + '">' + t + '</span>';
+});
+</script></body></html>"""
 
 
 def page(tpl, refresh=0, **ctx):
