@@ -489,6 +489,9 @@ def report():
         wr = rep["win_rate"] / 100
         e_calc = wr * rep["avg_win"] + (1 - wr) * rep["avg_loss"]
     return page("""<h1>📈 交易績效{% if run_id %}（run_id={{run_id}}）{% endif %}</h1>
+{% if feat0 %}<div class="card"><p>進場模式 <b>{{feat0.get('entry_mode','?')}}</b>｜
+方向 <b>{{ '做多' if feat0.get('direction')=='long' else ('做空' if feat0.get('direction')=='short' else '自動') }}</b>
+<span class="muted">（取自本 run 第一筆交易的特徵快照）</span></p></div>{% endif %}
 <div class="card"><form method="get" style="font-size:12px">
 run_id <select name="run_id">
 <option value="">全部彙總（最近 {{f.limit}} 筆）</option>
@@ -535,7 +538,7 @@ run_id <select name="run_id">
 <td>{{t.exit_reason}}</td><td>{{t.result_tag}}</td>
 <td class="{{cls(t.net_pnl)}}">{{money(t.net_pnl)}}</td><td>{{fmt(t.r_multiple, '.2f')}}</td></tr>{% endfor %}</table></div>
 {% endif %}""", run_id=run_id, rep=rep, rows=rows, po_s=po_s, pf_s=pf_s,
-                 e_calc=e_calc, f=f, runs=runs, money=money, cls=cls, fmt=fmt)
+                 e_calc=e_calc, f=f, runs=runs, feat0=feat0, money=money, cls=cls, fmt=fmt)
 
 
 @app.route("/journal", methods=["GET", "POST"])
@@ -906,12 +909,15 @@ def backtest_page():
         seed = int(request.form.get("seed", 42) or 42)
         risk = float(request.form.get("risk_budget", 0) or 0)
         period = request.form.get("period", "5d")
-        days_back = max(1, min(180, int(request.form.get("days_back", 60) or 60)))
         use_rules = bool(request.form.get("use_rules", "on"))
         entry_mode = request.form.get("entry_mode", "next_open")
         if entry_mode not in ("next_open", "breakout", "three_short", "three_long",
                               "b12_long", "nextday_long"):
             entry_mode = "next_open"
+        days_back = max(1, min(180, int(request.form.get("days_back", 60) or 60)))
+        # 隔日沖需要 20 日布林 → 歷史自動加長（<21 交易日時布林不成立、全 0 筆）
+        if entry_mode == "nextday_long":
+            days_back = max(days_back, 45)
         direction = request.form.get("direction", "auto")
         if direction not in ("short", "long"):
             direction = None          # auto：依進場模式自動映射

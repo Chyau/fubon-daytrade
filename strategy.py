@@ -47,6 +47,7 @@ DEFAULTS = {
     "max_lots": 10,          # 張數上限（跳空進場使單張風險極小時，避免張數爆衝）
     "risk_budget": 0.0,      # 單筆最大虧損預算（元）→ 張數 = 預算 ÷ 單張風險
     "max_lot_risk": 0.0,     # 單張風險上限（元）：超過則跳過進場（0＝不設限；直擊高價股大賠根因）
+    "min_lot_risk": 600,     # 單張風險下限（元）：低價股停損 1-2 ticks → 風險低於進出成本，贏也白贏（2883/1605 實測）
     "min_vol_ratio": 0.0,    # 觸發K最小量能比（0＝不過濾；1.5＝只做放量長黑，實測擋掉 91% 假跌破虧損）
     "entry_mode": "next_open",  # next_open＝長黑K後下一根開盤進場（逐字稿1）／breakout＝等突破觸發K高低點進場（逐字稿2爆量技巧）
     "market_bias_map": None,  # {日期: "up"/"down"} 大盤風向過濾：逆風日跳過進場（None＝不過濾）
@@ -337,6 +338,22 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                         continue
                 else:
                     entry = float(b["open"])
+                # 進場K本身也要過截止門（原本只擋等待期，13:05/13:30 進場因此漏過）
+                if entry is not None and b["hhmm"] > cfg["entry_cutoff"]:
+                    signals.append({"date": date_str, "symbol": symbol,
+                                    "ts": f"{date_str} {b['hhmm']}",
+                                    "event": "ENTRY_SKIP", "reason": "E_ENTRY_LATE",
+                                    "detail": json.dumps(
+                                        {"entry": entry,
+                                         "entry_cutoff": cfg["entry_cutoff"]},
+                                        ensure_ascii=False)})
+                    if log:
+                        log.info(f"[{date_str}] {symbol} 進場K {b['hhmm']} 晚於截止 "
+                                 f"{cfg['entry_cutoff']} → 不進場（E_ENTRY_LATE）")
+                    entry = None
+                    pending = False
+                    push_bar(b)
+                    continue
                 # 量能過濾：縮量長黑＝假跌破率高（實測 88%）→ 不追空
                 vr = (trigger_feat or {}).get("vol_ratio")
                 if cfg.get("min_vol_ratio", 0) > 0 and vr is not None \
@@ -364,6 +381,24 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                 #   預算 5,000 實虧 13,548 → 風險必須含一個 tick）
                 per_lot_risk = (abs(entry - init_stop)
                                 + tick_size(entry)) * 1000
+                # 單張風險下限：低價股停損僅 1-2 ticks → 風險低於來回成本
+                # （實測 2883/1605：每筆風險 60-90 元、成本 ~160 元 → 五筆全虧）
+                if cfg.get("min_lot_risk", 0) > 0 and per_lot_risk < cfg["min_lot_risk"]:
+                    signals.append({"date": date_str, "symbol": symbol,
+                                    "ts": f"{date_str} {b['hhmm']}",
+                                    "event": "RISK_SKIP", "reason": "E_RISK_TOO_SMALL",
+                                    "detail": json.dumps(
+                                        {"per_lot_risk": per_lot_risk,
+                                         "min_lot_risk": cfg["min_lot_risk"],
+                                         "entry": entry, "init_stop": init_stop},
+                                        ensure_ascii=False)})
+                    if log:
+                        log.info(f"[{date_str}] {symbol} 單張風險 {per_lot_risk:,.0f} "
+                                 f"低於下限 {cfg['min_lot_risk']:,.0f}（成本不敷）"
+                                 f"→ 跳過進場（E_RISK_TOO_SMALL）")
+                    pending = False
+                    push_bar(b)
+                    continue
                 # 單張風險上限（0＝不設限）：直擊「高價股大賠」根因（2454/3008 案例）
                 if cfg.get("max_lot_risk", 0) > 0 and per_lot_risk > cfg["max_lot_risk"]:
                     signals.append({"date": date_str, "symbol": symbol,
@@ -739,9 +774,11 @@ def run_nextday_long(days, cfg, symbol, run_id, log=None):
                 "events": [], "stop_updates": [], "stop": None,
             })
             pend = None
-        # ② 收盤篩選（需 ≥ 布林週期歷史）
-        if len(closes) >= period:
-            win = closes[-period:]
+        # ② 收盤篩選：布林週期自適應（20日完整；歷史 5~19 日 → 退化週期＋標記；
+        #    <5 日 → 無法判定）。原版 len(closes)>=20 硬門檻使短歷史回測永遠 0 筆。
+        eff_period = min(period, len(closes)) if len(closes) >= 5 else None
+        if eff_period:
+            win = closes[-eff_period:]
             ma = sum(win) / len(win)
             sd = (sum((x - ma) ** 2 for x in win) / len(win)) ** 0.5
             boll_up = ma + float(cfg.get("nd_bb_dev", 2.0)) * sd
@@ -754,8 +791,11 @@ def run_nextday_long(days, cfg, symbol, run_id, log=None):
             if ok:
                 pend = {"date": d, "entry_price": c}
                 if log:
-                    log.info(f"[{d}] {symbol} 隔日沖訊號：收 {c} > 布林上軌 {boll_up:.1f}"
-                             f"｜量 {vol:,.0f}｜相對高點 {c / h * 100:.0f}%")
+                    tag = "" if eff_period == period else \
+                        f"（退化週期 {eff_period}，歷史不足 {period} 日）"
+                    log.info(f"[{d}] {symbol} 隔日沖訊號：收 {c} > 布林上軌 "
+                             f"{boll_up:.1f}{tag}｜量 {vol:,.0f}｜"
+                             f"相對高點 {c / h * 100:.0f}%")
         closes.append(c)
         vols.append(vol)
     if pend:  # 資料收尾：無隔日資料 → 以訊號日收盤假平（零損益，僅標記）

@@ -234,7 +234,8 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
             if save:
                 tdb.record_signal(conn, sig["date"], sig["symbol"], sig["ts"],
                                   sig["event"], sig["reason"], sig["detail"])
-            log.debug(f"訊號：{sig['event']} {sig['reason']} @ {sig['ts']}")
+            if log:
+                log.debug(f"訊號：{sig['event']} {sig['reason']} @ {sig['ts']}")
         t = res["trade"]
         if t:
             t["run_id"] = run_id
@@ -245,6 +246,9 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
                 feat = {}
             if dir_map.get(date):
                 feat["market_dir"] = dir_map[date]
+            feat["entry_mode"] = cfg.get("entry_mode") or "next_open"
+            if cfg.get("direction"):
+                feat["direction"] = cfg["direction"]
             if pc:
                 try:
                     feat["gap_pct"] = round(
@@ -342,7 +346,8 @@ def performance(trades):
         "payoff": ((sum(wins) / len(wins)) / abs(sum(losses) / len(losses)))
                   if wins and losses else float("inf"),
         "pf": sum(wins) / abs(sum(losses)) if losses else float("inf"),
-        "avg_r": sum(t["r_multiple"] for t in trades) / n if n else 0.0,
+        "avg_r": (sum((t["r_multiple"] or 0) for t in trades) / n
+                  if n else 0.0),   # 隔日沖無停損 → r_multiple=None → 記 0
         "mdd": mdd, "max_consec_loss": worst,
         "avg_bars": sum(t["bars_held"] for t in trades) / n if n else 0.0,
         "tags": tags,
@@ -450,7 +455,11 @@ def main():
         symbol = a.symbol or a.yf.split(".")[0]
     elif a.fubon:
         import fubon_orders as fo
-        bars = fo.fetch_fubon_history(a.fubon, days_back=a.days_back, log=log)
+        _db = a.days_back
+        # 隔日沖需要 20 日布林 → 歷史自動加長（短歷史下布林不成立、全 0 筆）
+        if a.entry_mode == "nextday_long":
+            _db = max(_db, 45)
+        bars = fo.fetch_fubon_history(a.fubon, days_back=_db, log=log)
         symbol = a.symbol or a.fubon
     else:
         ap.error("請指定資料來源：--demo / --csv / --yf / --fubon")
