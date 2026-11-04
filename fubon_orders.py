@@ -170,15 +170,25 @@ def shortsell_info(sdk, acc, symbol):
                 "raw": None, "error": str(e)[:120]}
 
 
-def entry_gate(sdk, acc, symbol, direction):
+def entry_gate(sdk, acc, symbol, direction, lenient_zero=None):
     """進場資格預檢。
 
     回傳 (verdict, reason, detail)：
       verdict ∈ "ok"（可進場）/ "blocked"（明確不可）/ "unknown"（查不到→放行＋警告）
     規則：
       short 方向（融券賣出）→ 需 shortsell 額度 > 0；查不到額度=unknown
-      long  方向（現股先買後賣）→ 需 daytrade_tradable_quota > 0；0=blocked（沙箱常態）
+      long  方向（現股先買後賣）→ 需 daytrade_tradable_quota > 0；0=blocked（正式帳號）
+    lenient_zero：額度=0 時是否降級為 unknown。
+      None（預設）＝自動：測試沙箱 → lenient（沙箱不發當沖額度，quota=0 無證據力，
+      實測 30 檔全部 0）；正式帳號 → 嚴格（quota=0＝真的不能當沖）。
+      回測場景沙箱應放行（模擬不吃沙箱額度限制）；live 下單預設嚴格（沙箱
+      DayTrade 委託別會被後檯拒絕，避免進場後出不了場）。
     """
+    if lenient_zero is None:
+        try:
+            lenient_zero = fubon_cfg()["use_test"]
+        except Exception:
+            lenient_zero = False
     d = {"symbol": symbol, "direction": direction}
     if direction in ("short", "both"):
         m = shortsell_info(sdk, acc, symbol)
@@ -186,7 +196,10 @@ def entry_gate(sdk, acc, symbol, direction):
         if m.get("ok") and m.get("shortsell") is not None:
             try:
                 if float(m["shortsell"]) <= 0:
-                    return "blocked", "E_NO_SHORT_QUOTA", d   # 停止融券/無券源
+                    if lenient_zero:
+                        d["note"] = "沙箱不發融券額度→照跑"
+                        return "unknown", "E_GATE_SANDBOX", d
+                    return "blocked", "E_NO_SHORT_QUOTA", d
                 return "ok", "E_GATE_OK", d
             except (TypeError, ValueError):
                 pass
@@ -197,7 +210,10 @@ def entry_gate(sdk, acc, symbol, direction):
         if t.get("ok") and t.get("quota") is not None:
             try:
                 if float(t["quota"]) <= 0:
-                    return "blocked", "E_NOT_DAYTRADE", d     # 非當沖標的/無額度
+                    if lenient_zero:
+                        d["note"] = "沙箱不發當沖額度（quota=0 無證據力）→ 照跑"
+                        return "unknown", "E_GATE_SANDBOX", d
+                    return "blocked", "E_NOT_DAYTRADE", d
                 return "ok", "E_GATE_OK", d
             except (TypeError, ValueError):
                 pass

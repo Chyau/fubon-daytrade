@@ -416,10 +416,14 @@ class LiveEngine:
         try:
             sdk, acc = self._ensure_sdk()
             # 當沖/融券資格預檢（僅進場單；出場一律放行；FUBON_GATE=0 可關閉）
+            # lenient_zero=False：下單場景一律嚴格——沙箱 DayTrade 委託別會被後檯
+            # 拒絕（實測），做多進場後同日賣出可能失敗→避免卡部位。
+            # 沙箱要實驗做多下單：設 FUBON_GATE=0（dry 模式不受閘門影響）。
             if (note.startswith("進場")
                     and os.environ.get("FUBON_GATE", "1") != "0"):
                 verdict, greason, gd = fo.entry_gate(
-                    sdk, acc, sym, "long" if side == "buy" else "short")
+                    sdk, acc, sym, "long" if side == "buy" else "short",
+                    lenient_zero=False)
                 if verdict == "blocked":
                     log.warning(f"[live][{sym}] 進場擋下（{greason}）：{gd}")
                     self.log_event(sym, "GATE_BLOCK",
