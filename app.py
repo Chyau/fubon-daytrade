@@ -478,6 +478,13 @@ def live_page():
 {% for p in open_pos %}<tr><td><b>{{p.symbol}}</b></td><td>{{p.entry_time}}</td>
 <td>{{p.entry}}</td><td>{{p.stop}}</td><td>{{p.lots}}</td><td>{{p.last}}</td>
 <td class="{{cls(p.unreal)}}">{{money(p.unreal)}}</td></tr>{% endfor %}</table></div>{% endif %}
+{% if st.of_on %}<div class="card"><h2>📊 內外盤觀察（逐筆即時；僅記錄訊號，不自動下單）</h2>
+{% if not st.of_signals %}<p class="muted">尚無訊號——視窗需累積 {{'80+'}} 筆逐筆成交（盤中才有效）</p>{% endif %}
+<table><tr><th>時間</th><th>標的</th><th>訊號</th><th>明細</th></tr>
+{% for s in st.of_signals[:12] %}<tr><td>{{s.time}}</td><td><b>{{s.symbol}}</b></td>
+<td><b>{{s.kind}}</b></td><td class="muted" style="font-size:11px">{{s.detail}}</td></tr>{% endfor %}</table>
+<p class="muted">TREND=順勢｜DIVERGE_BUY=內盤高但價漲（承接）｜DIVERGE_SELL=外盤高但價跌（出貨）</p></div>
+{% else %}<p class="muted">內外盤觀察未啟用（.env 設 FUBON_API_KEY 後自動開啟）</p>{% endif %}
 <div class="card"><h2>即時事件流（最新 30 筆）</h2>
 {% if not st.events %}<p class="muted">尚無事件——引擎運行後，長黑K觸發／進場／停損下移／出場都會顯示於此並寫入資料庫</p>{% endif %}
 <table><tr><th>時間</th><th>標的</th><th>事件</th><th>原因碼</th><th>詳情</th></tr>

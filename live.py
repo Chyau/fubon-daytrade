@@ -40,6 +40,9 @@ class LiveEngine:
         self._seen = set()       # (symbol, ts, reason) 已處理事件
         self._sent = set()       # (symbol, date, kind) 已送單
         self._recorded = set()   # (symbol, date) 已入庫交易
+        self.of_rest = None      # 內外盤 REST client（惰性建立；需 FUBON_API_KEY）
+        self.of_trackers = {}    # symbol → OrderFlowTracker
+        self._of_seen = set()    # (symbol, minute, kind) 已記錄訊號
         self.state = {
             "running": False, "mode": "dry", "source": "yf", "symbols": [],
             "risk_budget": 0.0, "lots": 1, "interval": 20, "gate": True,
@@ -47,6 +50,7 @@ class LiveEngine:
             "auto_rules": [], "auto_rules_sig": None, "auto_mined_at": 0,
             "started_at": None, "last_check": None, "last_error": None,
             "cycles": 0, "events": [], "open_pos": {},
+            "of_on": False, "of_signals": [],
         }
 
     # ---------- 對外控制 ----------
@@ -71,6 +75,15 @@ class LiveEngine:
                 "started_at": datetime.now().strftime("%H:%M:%S"),
                 "last_error": None, "cycles": 0})
             self._seen, self._sent, self._recorded = set(), set(), set()
+            self.of_trackers, self._of_seen = {}, set()
+            self.state["of_signals"] = []
+            # 內外盤觀察模式：.env 有 FUBON_API_KEY 才啟用（REST 逐筆，僅記錄）
+            try:
+                import orderflow as _ofm
+                self.state["of_on"] = _ofm.has_api_key()
+            except Exception:
+                self.state["of_on"] = False
+            self.of_rest = None
             # 回測虧損黑名單警告（顯示用；是否排除由使用者決定）
             try:
                 import sqlite3 as _sq
@@ -173,6 +186,41 @@ class LiveEngine:
         finally:
             conn.close()
 
+    def _orderflow_check(self, sym):
+        """內外盤觀察模式：REST 逐筆 → tracker → 訊號只記錄（不下單）。
+        需 .env 有 FUBON_API_KEY；任何失敗都不影響主迴圈。"""
+        if not self.state.get("of_on"):
+            return
+        try:
+            import orderflow as ofm
+            if self.of_rest is None:
+                self.of_rest = ofm.build_rest_client()
+            if self.of_rest is None:
+                self.state["of_on"] = False
+                log.warning("內外盤觀察停用：REST client 建立失敗（檢查 API Key/套件）")
+                return
+            tr = self.of_trackers.get(sym)
+            if tr is None:
+                tr = self.of_trackers[sym] = ofm.OrderFlowTracker()
+            ticks = ofm.fetch_ticks_rest(self.of_rest, sym)
+            if ticks:
+                tr.feed(ticks)
+            sig = tr.signal()
+            if sig:
+                key = (sym, datetime.now().strftime("%Y%m%d%H%M"), sig["kind"])
+                if key not in self._of_seen:
+                    self._of_seen.add(key)
+                    self.state["of_signals"].insert(
+                        0, {"time": datetime.now().strftime("%H:%M:%S"),
+                            "symbol": sym, "kind": sig["kind"],
+                            "detail": sig["detail"]})
+                    del self.state["of_signals"][40:]
+                    self.log_event(sym, "OF_SIGNAL", str(sig["detail"])[:160],
+                                   f"E_OF_{sig['kind']}")
+                    log.info(f"[內外盤][{sym}] {sig['kind']} {sig['detail']}")
+        except Exception as e:
+            log.warning(f"內外盤觀察失敗（{sym}）：{str(e)[:120]}")
+
     def _cycle(self):
         if not self.state["symbols"]:
             return
@@ -194,6 +242,8 @@ class LiveEngine:
         self.state["cycles"] += 1
         direction = self.state.get("direction", "short")
         for sym in self.state["symbols"]:
+            if self.state.get("of_on"):
+                self._orderflow_check(sym)   # 內外盤觀察（失敗不影響主流程）
             bars = self._fetch_today(sym)
             if not bars:
                 continue
