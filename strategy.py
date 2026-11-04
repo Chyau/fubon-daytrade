@@ -251,11 +251,18 @@ def blocked_by_rules(rules, ctx):
 
 
 def _close(t, hhmm, fill, reason, cfg, date_str, log=None):
-    """出場結算：放空損益 ＋ 手續費（雙腿、三折、有下限）＋ 證交稅（賣出腿、減半）"""
+    """出場結算：方向感知損益（放空＝entry−fill；做多＝fill−entry）
+    ＋手續費（雙腿、三折、有下限）＋證交稅（賣出腿：空方＝進場券賣、多方＝出場現賣）"""
     shares, entry = t["shares"], t["entry_price"]
-    gross = (entry - fill) * shares
-    sell_val = entry * shares          # 券賣（先賣後買）→ 證交稅在賣出腿
-    buy_val = fill * shares
+    direction = t.get("direction") or "short"
+    if direction == "long":
+        gross = (fill - entry) * shares
+        sell_val = fill * shares          # 現股賣出（出場腿）→ 證交稅在出場
+        buy_val = entry * shares          # 買進腿＝進場
+    else:
+        gross = (entry - fill) * shares
+        sell_val = entry * shares         # 券賣（進場腿）→ 證交稅在進場
+        buy_val = fill * shares           # 買回腿＝出場
     fee = (max(cfg["min_fee"], sell_val * cfg["fee_rate"] * cfg["fee_discount"])
            + max(cfg["min_fee"], buy_val * cfg["fee_rate"] * cfg["fee_discount"]))
     tax = sell_val * cfg["tax_rate"]
