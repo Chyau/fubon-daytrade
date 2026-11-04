@@ -36,12 +36,30 @@ def _feat(t):
         return {}
 
 
+def _gap_band(t):
+    """開盤跳空區間（開盤 vs 昨收，%）；features.gap_pct 由回測入庫時補上"""
+    try:
+        g = float(_feat(t).get("gap_pct"))
+    except (TypeError, ValueError):
+        return "?"
+    if g < -1:
+        return "跳空<-1%"
+    if g < 0:
+        return "-1~0%"
+    if g < 1:
+        return "0~+1%"
+    return "跳空>+1%"
+
+
 DIMS = {
     "trigger_bucket": lambda t: _feat(t).get("trigger_bucket") or "?",
     "body_pct_band": lambda t: strategy.body_pct_band(_feat(t).get("body_pct", 0.0)),
     "vol_ratio_band": lambda t: strategy.vol_ratio_band(_feat(t).get("vol_ratio")),
     "pattern": lambda t: _feat(t).get("pattern") or "無資料（舊紀錄）",
     "weekday": lambda t: _feat(t).get("weekday") or "?",
+    "market_dir": lambda t: {"up": "大盤漲", "down": "大盤跌"}.get(
+        _feat(t).get("market_dir"), "?"),
+    "gap_band": _gap_band,
     "symbol": lambda t: t["symbol"],
     "exit_reason": lambda t: t["exit_reason"] or "?",
     "result_tag": lambda t: t["result_tag"] or "?",

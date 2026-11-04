@@ -916,12 +916,32 @@ def backtest_page():
         if direction not in ("short", "long"):
             direction = None          # auto：依進場模式自動映射
         daytrade_check = bool(request.form.get("daytrade_check"))
+        no_blacklist = bool(request.form.get("no_blacklist", "on"))
         raw = (request.form.get("symbols") or "").replace("，", ",").replace(" ", ",")
         symbols = [s.strip().upper() for s in raw.split(",") if s.strip()][:30]
         cfg = {**strategy.DEFAULTS, "risk_budget": risk,
                "entry_mode": entry_mode, "direction": direction}
+        # 大盤方向地圖（坑點維度 market_dir；失敗留白）
+        try:
+            cfg["market_dir_map"] = bt.fetch_market_map()
+        except Exception as _e:
+            log.warning(f"大盤地圖取得失敗（維度留白）：{_e}")
         run_id = _t.strftime("%Y%m%d-%H%M%S") + "-" + _uuid.uuid4().hex[:6]
         done, failed, errs, total_bars = [], [], [], 0
+        # 黑名單排除（勾選時；n≥10 且累積淨損為負）
+        if no_blacklist and symbols:
+            try:
+                _conn = tdb.connect()
+                _bl = {r["symbol"]: r for r in tdb.get_blacklist(_conn, min_trades=10)}
+                _conn.close()
+                _drop = [s for s in symbols if s in _bl]
+                if _drop:
+                    symbols = [s for s in symbols if s not in _bl]
+                    for s in _drop:
+                        errs.append(f"{s}: 黑名單（{_bl[s]['n']} 筆 "
+                                    f"淨{_bl[s]['net']:+,.0f}）")
+            except Exception:
+                pass
         # 當沖/融券資格預檢（僅富邦來源；blocked → 跳過該標的）
         if daytrade_check and src == "fubon" and symbols:
             _dm = {"three_short": "short", "three_long": "long",
@@ -996,7 +1016,8 @@ def backtest_page():
 <option value="long">做多</option></select>｜
 單筆風險預算 <input name="risk_budget" value="0" size="8"> 元（0＝固定 1 張）｜
 <label><input type="checkbox" name="use_rules" checked> 套用核准規則</label>｜
-<label><input type="checkbox" name="daytrade_check" checked> 當沖/融券資格預檢</label></p>
+<label><input type="checkbox" name="daytrade_check" checked> 當沖/融券資格預檢</label>｜
+<label><input type="checkbox" name="no_blacklist" checked> 排除黑名單股</label></p>
 {% if ls_syms %}<p class="muted">🧭 已預填多空分類清單（基準日 {{ls_date}}｜
 做空＋偏空，做空優先排序）— 來源：權證小哥 tw_stock.db，可自行增刪後執行。</p>{% endif %}
 <p>富邦模式：回溯天數 <input name="days_back" value="10" size="3">（需 .env 測試憑證）｜

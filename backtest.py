@@ -21,6 +21,7 @@
 """
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -164,6 +165,25 @@ def make_demo_bars(days=15, seed=42, log=None):
 
 
 # ==================== 回測主流程 ====================
+def fetch_market_map(log=None):
+    """^TWII 日K → {日期: 'up'/'down'}（當日收盤 vs 前日收盤）— 坑點維度用"""
+    import yfinance as yf
+    df = yf.download("^TWII", period="6mo", interval="1d",
+                     progress=False, auto_adjust=False)
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df.columns = df.columns.get_level_values(0)
+    daily, prev_c = {}, None
+    for idx, r in df.iterrows():
+        c = r["Close"]
+        if c != c:
+            continue
+        d = idx.strftime("%Y-%m-%d")
+        if prev_c:
+            daily[d] = "up" if float(c) > prev_c else "down"
+        prev_c = float(c)
+    return daily
+
+
 def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
     """save=False：純模擬不入庫（參數掃描/A-B 用）；use_rules=False：不套用核准規則（原版對照）"""
     days = {}
@@ -202,10 +222,12 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
                      f"（已寫入 {tdb.DB_PATH}）")
         return trades
     prev_day_close = None
+    dir_map = cfg.get("market_dir_map") or cfg.get("market_bias_map") or {}
     for date in sorted(days):
         cfg_day = cfg
         if cfg.get("entry_mode") == "b12_long" and prev_day_close:
             cfg_day = {**cfg, "b12_prev_close": prev_day_close}
+        pc = prev_day_close          # 昨收（run_day 前先取，下方才會更新為今日收）
         res = strategy.run_day(days[date], cfg_day, symbol, date, log=log, rules=rules)
         prev_day_close = days[date][-1]["close"]
         for sig in res["signals"]:
@@ -216,6 +238,20 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
         t = res["trade"]
         if t:
             t["run_id"] = run_id
+            # 特徵補強：大盤方向＋開盤跳空%（學習迴路坑點維度；無資料留白）
+            try:
+                feat = json.loads(t.get("features") or "{}")
+            except Exception:
+                feat = {}
+            if dir_map.get(date):
+                feat["market_dir"] = dir_map[date]
+            if pc:
+                try:
+                    feat["gap_pct"] = round(
+                        (days[date][0]["open"] / pc - 1) * 100, 2)
+                except (TypeError, ZeroDivisionError):
+                    pass
+            t["features"] = json.dumps(feat, ensure_ascii=False)
             if save:
                 dup = tdb.trade_exists(conn, t)
                 tid = tdb.record_trade(conn, t)   # record_trade 自動標記 is_dup
@@ -383,6 +419,8 @@ def main():
                     help="進場模式：breakout＝等突破觸發K高低點（逐字稿爆量技巧）")
     ap.add_argument("--market-filter", action="store_true",
                     help="大盤風向過濾（加權指數日漲跌：漲=跳過放空、跌=跳過做多）")
+    ap.add_argument("--allow-blacklist", action="store_true",
+                    help="允許回測虧損黑名單標的（預設排除：n≥10 且累積淨損為負）")
     ap.add_argument("--daytrade-check", action="store_true",
                     help="回測前檢查當沖/融券資格（SDK 登入；明確不可→中止，查不到→警告續跑）")
     ap.add_argument("--log-level", default=None, choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -456,35 +494,40 @@ def main():
         return
 
     market_map = None
-    if a.market_filter:
-        try:
-            import yfinance as yf
-            df = yf.download("^TWII", period="6mo", interval="1d",
-                             progress=False, auto_adjust=False)
-            if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-                df.columns = df.columns.get_level_values(0)
-            daily, prev_c = {}, None
-            for idx, r in df.iterrows():
-                c = r["Close"]
-                if c != c:
-                    continue
-                d = idx.strftime("%Y-%m-%d")
-                if prev_c:
-                    daily[d] = "up" if float(c) > prev_c else "down"
-                prev_c = float(c)
-            market_map = daily
-            log.info(f"大盤風向過濾啟用：{len(daily)} 個交易日")
-        except Exception as e:
-            log.warning(f"大盤資料取得失敗，過濾停用：{e}")
+    try:
+        market_map = fetch_market_map(log)   # 一律嘗試：坑點維度「大盤方向」需要
+        log.info(f"大盤方向地圖：{len(market_map)} 個交易日")
+    except Exception as e:
+        log.warning(f"大盤資料取得失敗（market_dir 維度停用）：{e}")
+    if a.market_filter and market_map:
+        log.info("大盤風向過濾啟用：逆風日跳過進場")
 
     cfg = {"body_mult": a.body_mult, "body_window": a.body_window,
            "min_body_pct": a.min_body_pct, "body_range_ratio": a.body_range_ratio,
            "entry_cutoff": a.entry_cutoff, "force_exit": a.force_exit,
            "risk_budget": a.risk_budget, "lots": a.lots,
            "max_lot_risk": a.max_lot_risk, "min_vol_ratio": a.min_vol_ratio,
-           "entry_mode": a.entry_mode, "market_bias_map": market_map,
-        "direction": a.direction,
+           "entry_mode": a.entry_mode,
+           # 過濾語意不變：market_bias_map 只在 --market-filter 時啟用；
+           # market_dir_map 只餵特徵記錄（坑點維度），不過濾
+           "market_bias_map": market_map if a.market_filter else None,
+           "market_dir_map": market_map,
+           "direction": a.direction,
            "fee_discount": a.fee_discount, "min_fee": a.min_fee, "tax_rate": a.tax_rate}
+
+    # 黑名單排除（預設開；--allow-blacklist 覆寫）
+    if not a.allow_blacklist:
+        try:
+            _conn0 = tdb.connect()
+            _bl = {r["symbol"]: r for r in tdb.get_blacklist(_conn0, min_trades=10)}
+            _conn0.close()
+            if symbol in _bl:
+                b = _bl[symbol]
+                log.error(f"✗ {symbol} 在回測虧損黑名單（{b['n']} 筆 淨 {b['net']:+,.0f}）"
+                          f"→ 回測中止（--allow-blacklist 可強制）")
+                return
+        except Exception as _e:
+            log.warning(f"黑名單檢查失敗（照跑）：{_e}")
 
     if a.ab_rules:  # A/B：無規則 vs 套用核准規則（純模擬不入庫）
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-AB"

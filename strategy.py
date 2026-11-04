@@ -41,7 +41,7 @@ DEFAULTS = {
     "min_body_pct": 0.5,     # 實體/開盤價 ≥ 0.5%
     "body_range_ratio": 0.6, # 實體佔全K振幅 ≥ 60%
     "min_history": 5,        # 平均實體歷史不足時，僅用 min_body_pct
-    "entry_cutoff": "13:00", # 此時後不再觸發進場
+    "entry_cutoff": "12:00", # 此時後不再觸發進場（數據：12點檔 avgR -0.82/59筆、13點檔 -0.72/33筆 → 收緊）
     "force_exit": "13:20",   # 時間強制出場
     "lots": 1,               # 固定張數（risk_budget > 0 時自動計算）
     "max_lots": 10,          # 張數上限（跳空進場使單張風險極小時，避免張數爆衝）

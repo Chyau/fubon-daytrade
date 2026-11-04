@@ -71,6 +71,24 @@ class LiveEngine:
                 return False, "引擎已在執行中"
             if not symbols:
                 return False, "請先設定標的"
+            # 回測虧損黑名單：預設直接排除（BLACKLIST_FILTER=0 退回僅警告）
+            if os.environ.get("BLACKLIST_FILTER", "1") != "0":
+                try:
+                    _conn = tdb.connect()
+                    _bl = {r["symbol"]: r
+                           for r in tdb.get_blacklist(_conn, min_trades=10)}
+                    _conn.close()
+                    _drop = [s for s in symbols if s in _bl]
+                    if _drop:
+                        for s in _drop:
+                            b = _bl[s]
+                            log.warning(f"🚫 黑名單排除 {s}"
+                                        f"（{b['n']} 筆 淨 {b['net']:+,.0f}）")
+                        symbols = [s for s in symbols if s not in _bl]
+                except Exception as _e:
+                    log.warning(f"黑名單檢查失敗（照跑）：{_e}")
+            if not symbols:
+                return False, "標的全部在黑名單（BLACKLIST_FILTER=0 可強制）"
             self.state.update({
                 "running": True, "mode": mode, "source": source,
                 "direction": direction if direction in ("short", "long", "both")
@@ -89,22 +107,6 @@ class LiveEngine:
             # 內外盤觀察模式：富邦 SDK + 憑證即可（行情 REST 實測不需 API Key）
             self.state["of_on"] = orderflow_available()
             self.of_rest = None
-            # 回測虧損黑名單警告（顯示用；是否排除由使用者決定）
-            try:
-                import sqlite3 as _sq
-                _dbp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "data", "trades.db")
-                if os.path.exists(_dbp):
-                    _c = _sq.connect(_dbp)
-                    for s_ in symbols:
-                        r = _c.execute(
-                            "SELECT COUNT(*) n, SUM(net_pnl) s FROM trades "
-                            "WHERE symbol=? AND run_id NOT LIKE 'DEMO%'", (s_,)).fetchone()
-                        if r and r[0] and (r[1] or 0) < 0:
-                            log.warning(f"⚠ {s_} 在回測虧損黑名單（{r[0]} 筆 淨 {r[1]:+,.0f}）")
-                    _c.close()
-            except Exception:
-                pass
             self._stop.clear()
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
@@ -312,6 +314,26 @@ class LiveEngine:
             except Exception:
                 pass
 
+    def _market_dir(self):
+        """大盤當日方向（up/down）——每日抓一次 ^TWII 快取；失敗回 None"""
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.state.get("mkt_date") == today:
+            return self.state.get("mkt_dir")
+        d = None
+        try:
+            import yfinance as yf
+            df = yf.download("^TWII", period="5d", interval="1d",
+                             progress=False, auto_adjust=False)
+            if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+                df.columns = df.columns.get_level_values(0)
+            closes = [float(c) for c in df["Close"].tolist() if c == c]
+            if len(closes) >= 2:
+                d = "up" if closes[-1] > closes[-2] else "down"
+        except Exception as e:
+            log.debug(f"大盤方向取得失敗：{e}")
+        self.state["mkt_date"], self.state["mkt_dir"] = today, d
+        return d
+
     # ---------- 事件處理 ----------
     def _handle(self, sym, date, res, bars):
         events = list(res["signals"] or [])
@@ -374,6 +396,15 @@ class LiveEngine:
             self._recorded.add((sym, date))
             t2 = dict(t)
             t2["run_id"] = f"LIVE-{date}"
+            # 特徵補強：大盤方向（坑點維度；live 無昨收資料故不含 gap_pct）
+            try:
+                import json as _json
+                _feat = _json.loads(t2.get("features") or "{}")
+                if "market_dir" not in _feat:
+                    _feat["market_dir"] = self._market_dir()
+                    t2["features"] = _json.dumps(_feat, ensure_ascii=False)
+            except Exception:
+                pass
             conn = tdb.connect()
             try:
                 tid = tdb.record_trade(conn, t2)
