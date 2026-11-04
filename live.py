@@ -27,6 +27,15 @@ ensure_utf8_stdout()
 import db as tdb            # noqa: E402
 import strategy             # noqa: E402
 import fubon_orders as fo   # noqa: E402
+
+
+def orderflow_available():
+    """內外盤觀察是否可用：SDK 已安裝＋憑證設定存在（行情 REST 免 API Key）"""
+    try:
+        return fo.has_sdk() and bool(
+            os.environ.get("FUBON_TEST_ID") or os.environ.get("FUBON_LIVE_ID"))
+    except Exception:
+        return False
 import chips as chips_mod   # noqa: E402
 
 log = get_logger("live")
@@ -50,7 +59,7 @@ class LiveEngine:
             "auto_rules": [], "auto_rules_sig": None, "auto_mined_at": 0,
             "started_at": None, "last_check": None, "last_error": None,
             "cycles": 0, "events": [], "open_pos": {},
-            "of_on": False, "of_signals": [],
+            "of_on": orderflow_available(), "of_signals": [],
         }
 
     # ---------- 對外控制 ----------
@@ -78,12 +87,7 @@ class LiveEngine:
             self.of_trackers, self._of_seen = {}, set()
             self.state["of_signals"] = []
             # 內外盤觀察模式：富邦 SDK + 憑證即可（行情 REST 實測不需 API Key）
-            try:
-                import fubon_orders as _fo
-                self.state["of_on"] = _fo.has_sdk() and bool(
-                    os.environ.get("FUBON_TEST_ID") or os.environ.get("FUBON_LIVE_ID"))
-            except Exception:
-                self.state["of_on"] = False
+            self.state["of_on"] = orderflow_available()
             self.of_rest = None
             # 回測虧損黑名單警告（顯示用；是否排除由使用者決定）
             try:

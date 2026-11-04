@@ -221,8 +221,29 @@ SETUP_HINT = """【SDK 或憑證未就緒】
    （帳號=憑證 CN 值；登入密碼與憑證密碼皆為官方預設 12345678）
 3. 注意：PLACE_ORDER=false 時本工具仍可輸出下單參數（不需 SDK、不會送單）"""
 
+# 共用登入 session（多檔回測/引擎只登入一次）
+_SDK_SESSION = {"key": None, "sdk": None, "acc": None}
 
-def connect_sdk(cfg, retries=3):
+
+def reset_sdk_session():
+    """登出並清掉共用 session（網路異常重連、切換環境時用）"""
+    try:
+        if _SDK_SESSION["sdk"] is not None:
+            _SDK_SESSION["sdk"].logout()
+    except Exception:
+        pass
+    _SDK_SESSION.update(key=None, sdk=None, acc=None)
+
+
+def connect_sdk(cfg, retries=3, reuse=True):
+    """登入 SDK（同設定重用 session，避免多檔回測重複登入 30 次）。
+
+    reuse=True：快取 (sdk, Account)；設定變更或 reset_sdk_session() 後重新登入。
+    失敗的舊 session：呼叫端捕捉例外後可 reset_sdk_session() 再連。
+    """
+    key = (cfg["use_test"], cfg["user_id"], cfg["cert_path"])
+    if reuse and _SDK_SESSION["sdk"] is not None and _SDK_SESSION["key"] == key:
+        return _SDK_SESSION["sdk"], _SDK_SESSION["acc"]
     from fubon_neo.sdk import FubonSDK
     env_name = "測試沙箱" if cfg["use_test"] else "正式（實單）"
     log.info(f"登入{env_name}：帳號={cfg['user_id'] or '(未設定)'} 憑證={cfg['cert_path'] or '(未設定)'}")
@@ -263,6 +284,8 @@ def connect_sdk(cfg, retries=3):
         raise SystemExit("登入成功但找不到可用帳戶")
     sel = stock_accs[0]
     log.info(f"使用證券帳戶：{dig(sel, 'branch_no')}-{dig(sel, 'account')}")
+    if reuse:
+        _SDK_SESSION.update(key=key, sdk=sdk, acc=sel)
     return sdk, sel
 
 
@@ -737,10 +760,7 @@ def fetch_fubon_history(symbol, days_back=60, timeframe="5", log=None):
         except Exception as e:
             if log:
                 log.warning(f"intraday 亦失敗：{str(e)[:60]}")
-    try:
-        sdk.logout()
-    except Exception:
-        pass
+    # 不登出：session 由 connect_sdk 快取重用（多檔一次登入）；需要時用 reset_sdk_session()
     return bars
 
 
