@@ -339,9 +339,14 @@ class LiveEngine:
                     conn.close()
             # 自動下單（僅 test 模式；dry 只記錄）
             if self.state["mode"] == "test":
+                _t_dir = (t.get("direction") if isinstance(t, dict) else None) \
+                    or self.state.get("direction", "short")
                 if kind == "ENTRY" and (sym, date, "entry") not in self._sent:
                     self._sent.add((sym, date, "entry"))
-                    self._order(sym, "sell", "short", "進場放空")
+                    if _t_dir == "long":
+                        self._order(sym, "buy", "stock", "進場買進")
+                    else:
+                        self._order(sym, "sell", "short", "進場放空")
                     # 進階保護：同步下「停損買回條件單」（環境變數開關，預設關）
                     if os.environ.get("LIVE_AUTO_CONDITION") == "1":
                         try:
@@ -355,7 +360,10 @@ class LiveEngine:
                             log.error(f"[live][{sym}] 停損條件單建立失敗：{ce}")
                 elif kind == "EXIT" and (sym, date, "exit") not in self._sent:
                     self._sent.add((sym, date, "exit"))
-                    self._order(sym, "buy", "stock", f"出場買回（{reason}）")
+                    if _t_dir == "long":
+                        self._order(sym, "sell", "stock", f"出場賣出（{reason}）")
+                    else:
+                        self._order(sym, "buy", "stock", f"出場買回（{reason}）")
         # 完成交易入庫（每 (標的,日期) 一次）
         if t and t.get("exit_price") is not None and (sym, date) not in self._recorded:
             self._recorded.add((sym, date))
@@ -383,6 +391,8 @@ class LiveEngine:
         self.state["last_check"] = datetime.now().strftime("%H:%M:%S")
 
     # ---------- 下單（test 沙箱） ----------
+    MY_ORDER_TAG = "FSDT"    # user_def 標記：共用測試帳號下辨別自己的單
+
     def _ensure_sdk(self):
         if self.state.get("sdk") is None:
             cfg = fo.fubon_cfg()
@@ -400,17 +410,37 @@ class LiveEngine:
     def _order(self, sym, side, ot, note):
         try:
             sdk, acc = self._ensure_sdk()
+            # 當沖/融券資格預檢（僅進場單；出場一律放行；FUBON_GATE=0 可關閉）
+            if (note.startswith("進場")
+                    and os.environ.get("FUBON_GATE", "1") != "0"):
+                verdict, greason, gd = fo.entry_gate(
+                    sdk, acc, sym, "long" if side == "buy" else "short")
+                if verdict == "blocked":
+                    log.warning(f"[live][{sym}] 進場擋下（{greason}）：{gd}")
+                    self.log_event(sym, "GATE_BLOCK",
+                                   f"進場資格不符（{greason}）｜{str(gd)[:120]}",
+                                   greason)
+                    self.state["last_error"] = f"{sym} 進場擋下：{greason}"
+                    return
+                if verdict == "unknown":
+                    log.info(f"[live][{sym}] 進場資格查不到（沙箱常態）→ 照常送單")
             from fubon_neo.sdk import Order
             from fubon_neo.constant import (BSAction, MarketType, PriceType,
                                             TimeInForce, OrderType)
             order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
                                    OrderType, sym, side, 1000, None, True, False,
-                                   "ROD", ot, "FSDT")
+                                   "ROD", ot, self.MY_ORDER_TAG)
             res = sdk.stock.place_order(acc, order)
             data = fo.dig(res, "data")
             no = fo.dig(data, "order_no") if data else None
             ok = bool(fo.dig(res, "is_success", True))
-            log.info(f"[live][{sym}] {note} 送單 order_no={no} ok={ok}")
+            log.info(f"[live][{sym}] {note} 送單 order_no={no} ok={ok} "
+                     f"user_def={self.MY_ORDER_TAG}")
+            if no:   # 記住自己的委託書號（共用沙箱帳號下，查單只認自己的）
+                self.state.setdefault("my_orders", []).append(
+                    {"order_no": str(no), "symbol": sym, "side": side,
+                     "time": datetime.now().strftime("%H:%M:%S")})
+                del self.state["my_orders"][:-50]
             conn = tdb.connect()
             try:
                 tdb.record_order(conn, mode="test", symbol=sym, side=side,
@@ -425,6 +455,16 @@ class LiveEngine:
             log.error(f"[live][{sym}] 送單失敗：{e}", exc_info=True)
             self.log_event(sym, "ORDER_FAIL", str(e)[:160])
             self.state["last_error"] = f"送單失敗：{e}"
+
+    def my_order_results(self):
+        """只回自己的委託回報（共用測試帳號防混）：自記 order_no 或 user_def 標記"""
+        sdk, acc = self._ensure_sdk()
+        rows = fo.dig(sdk.stock.get_order_results(acc), "data") or []
+        my_nos = {o.get("order_no") for o in self.state.get("my_orders", [])}
+        out = [r for r in rows
+               if (fo.dig(r, "user_def") == self.MY_ORDER_TAG
+                   or str(fo.dig(r, "order_no")) in my_nos)]
+        return out
 
     # ---------- 行情來源 ----------
     def _fetch_today(self, sym):

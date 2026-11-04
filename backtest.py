@@ -383,6 +383,8 @@ def main():
                     help="進場模式：breakout＝等突破觸發K高低點（逐字稿爆量技巧）")
     ap.add_argument("--market-filter", action="store_true",
                     help="大盤風向過濾（加權指數日漲跌：漲=跳過放空、跌=跳過做多）")
+    ap.add_argument("--daytrade-check", action="store_true",
+                    help="回測前檢查當沖/融券資格（SDK 登入；明確不可→中止，查不到→警告續跑）")
     ap.add_argument("--log-level", default=None, choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     a = ap.parse_args()
     log = get_logger("backtest", a.log_level)
@@ -418,6 +420,30 @@ def main():
     if not bars:
         log.error("無資料，回測中止")
         return
+
+    if a.daytrade_check:
+        # 回測前資格預檢：當沖標的（long）與融券額度（short）
+        # 註：歷史名單會調整，此檢查以「查詢當下」資格近似
+        _dir = a.direction or ("long" if a.entry_mode in
+                               ("three_long", "b12_long", "nextday_long") else "short")
+        try:
+            import fubon_orders as _fo
+            if not _fo.has_sdk():
+                log.warning("未安裝 fubon_neo SDK → 跳過資格檢查（--daytrade-check）")
+            else:
+                _sdk, _acc = _fo.connect_sdk(_fo.fubon_cfg())
+                _verdict, _reason, _d = _fo.entry_gate(_sdk, _acc, symbol, _dir)
+                if _verdict == "blocked":
+                    log.error(f"✗ {symbol} 不符合{_dir}當沖資格（{_reason}：{_d}）"
+                              f"→ 回測中止（該標的在實盤無法執行此方向）")
+                    return
+                log.info(f"✓ 資格預檢 {symbol}（{_dir}）：{_verdict}（{_reason}）"
+                         + ("（沙箱額度查不到屬常態，正式帳號會有真實額度）"
+                            if _verdict == "unknown" else ""))
+        except SystemExit:
+            raise
+        except Exception as _e:
+            log.warning(f"資格預檢失敗（續跑）：{str(_e)[:120]}")
 
     if a.sweep:
         base_cfg = {"body_mult": a.body_mult, "body_window": a.body_window,

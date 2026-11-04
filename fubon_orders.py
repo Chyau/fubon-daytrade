@@ -102,6 +102,109 @@ def dig(obj, key, default=None):
     return getattr(obj, key, default)
 
 
+def filter_my_orders(rows, user_def="FSDT", order_nos=None):
+    """共用測試帳號下過濾「自己的」委託回報。
+
+    沙箱/正式帳號可能多人共用（get_order_results 回傳所有人的單），
+    辨別依據（任一符合）：
+      1. user_def == user_def 參數（下單時蓋的章，回報原封帶回）
+      2. order_no 在 order_nos 白名單（place_order 回傳時自己記下來的）
+    """
+    nos = {str(n) for n in (order_nos or ())}
+    out = []
+    for r in rows or []:
+        if dig(r, "user_def") == user_def or str(dig(r, "order_no") or "") in nos:
+            out.append(r)
+    return out
+
+
+# ==================== 當沖／融券資格閘門 ====================
+
+def daytrade_info(sdk, acc, symbol):
+    """現股當沖資格（daytrade_and_stock_info）。
+
+    回傳 dict：ok=查詢成功與否、quota=可當沖額度、status=後檯狀態碼、raw=原物件。
+    實測（SDK 2.2.8 沙箱）：額度一律 0（沙箱不發當沖額度）、DayTrade 委託別被
+    後檯拒絕（'委託別錯誤'）→ 沙箱無法現股當沖；正式帳號才會有真實額度。
+    """
+    try:
+        res = sdk.stock.daytrade_and_stock_info(acc, symbol)
+        d = dig(res, "data")
+        ok = bool(dig(res, "is_success", True))
+        return {"ok": ok and d is not None,
+                "quota": dig(d, "daytrade_tradable_quota"),
+                "orig_quota": dig(d, "daytrade_orig_quota"),
+                "status": dig(d, "status"),
+                "raw": d}
+    except Exception as e:
+        return {"ok": False, "quota": None, "status": None,
+                "raw": None, "error": str(e)[:120]}
+
+
+def shortsell_info(sdk, acc, symbol):
+    """融券（先賣後買）額度（margin_quota）。
+
+    回傳 dict：ok、shortsell=可融券賣出股數、margin=可融資買進股數、raw。
+    實測（沙箱）：data=None（沙箱不發融券額度）→ verdict=unknown；
+    正式帳號回真實額度。實盤拒件例：'停止融券賣出(後檯)'。
+    """
+    try:
+        res = sdk.stock.margin_quota(acc, symbol)
+        d = dig(res, "data")
+        ss = None
+        for k in ("shortsell_quota", "short_sell_quota", "shortsell", "sbl_quota"):
+            v = dig(d, k)
+            if v is not None:
+                ss = v
+                break
+        mg = None
+        for k in ("margin_quota", "margin", "financing_quota"):
+            v = dig(d, k)
+            if v is not None:
+                mg = v
+                break
+        return {"ok": bool(dig(res, "is_success", True)) and d is not None,
+                "shortsell": ss, "margin": mg, "raw": d}
+    except Exception as e:
+        return {"ok": False, "shortsell": None, "margin": None,
+                "raw": None, "error": str(e)[:120]}
+
+
+def entry_gate(sdk, acc, symbol, direction):
+    """進場資格預檢。
+
+    回傳 (verdict, reason, detail)：
+      verdict ∈ "ok"（可進場）/ "blocked"（明確不可）/ "unknown"（查不到→放行＋警告）
+    規則：
+      short 方向（融券賣出）→ 需 shortsell 額度 > 0；查不到額度=unknown
+      long  方向（現股先買後賣）→ 需 daytrade_tradable_quota > 0；0=blocked（沙箱常態）
+    """
+    d = {"symbol": symbol, "direction": direction}
+    if direction in ("short", "both"):
+        m = shortsell_info(sdk, acc, symbol)
+        d["shortsell"] = m.get("shortsell")
+        if m.get("ok") and m.get("shortsell") is not None:
+            try:
+                if float(m["shortsell"]) <= 0:
+                    return "blocked", "E_NO_SHORT_QUOTA", d   # 停止融券/無券源
+                return "ok", "E_GATE_OK", d
+            except (TypeError, ValueError):
+                pass
+        return "unknown", "E_GATE_UNKNOWN", d
+    if direction == "long":
+        t = daytrade_info(sdk, acc, symbol)
+        d["daytrade_quota"] = t.get("quota")
+        if t.get("ok") and t.get("quota") is not None:
+            try:
+                if float(t["quota"]) <= 0:
+                    return "blocked", "E_NOT_DAYTRADE", d     # 非當沖標的/無額度
+                return "ok", "E_GATE_OK", d
+            except (TypeError, ValueError):
+                pass
+        return "unknown", "E_GATE_UNKNOWN", d
+    return "unknown", "E_GATE_UNKNOWN", d
+
+
 def has_sdk():
     try:
         from fubon_neo.sdk import FubonSDK, Order  # noqa
@@ -140,7 +243,7 @@ def connect_sdk(cfg, retries=3):
                 log.error(f"登入失敗：{getattr(acc, 'message', acc)}")
                 raise SystemExit(f"富邦登入失敗：{getattr(acc, 'message', acc)}")
             log.info("登入成功")
-            return sdk, acc
+            break
         except SystemExit:
             raise
         except Exception as e:
@@ -148,15 +251,19 @@ def connect_sdk(cfg, retries=3):
             log.warning(f"連線異常（第 {attempt}/{retries} 次）：{str(e)[:100]}")
             if attempt < retries:
                 time.sleep(2)
-    raise RuntimeError(
-        f"網路無法連上富邦主機（DNS／防火牆／VPN 問題，非憑證問題）— 已重試 {retries} 次｜"
-        f"最後錯誤：{str(last_err)[:120]}")
-    # 選證券帳戶（排除期貨/複委託）
+    else:
+        raise RuntimeError(
+            f"網路無法連上富邦主機（DNS／防火牆／VPN 問題，非憑證問題）— 已重試 {retries} 次｜"
+            f"最後錯誤：{str(last_err)[:120]}")
+    # 選證券帳戶（排除期貨/複委託）——SDK 的 place_order/margin_quota 等
+    # 都要求 Account 物件（login 原始回傳是 CustomReturnType，直接用會 TypeError）
     stock_accs = [a for a in (dig(acc, "data") or [])
                   if dig(a, "account_type") in (None, "stock", "")] or list(dig(acc, "data") or [])
     if not stock_accs:
         raise SystemExit("登入成功但找不到可用帳戶")
-    return sdk, stock_accs[0]
+    sel = stock_accs[0]
+    log.info(f"使用證券帳戶：{dig(sel, 'branch_no')}-{dig(sel, 'account')}")
+    return sdk, sel
 
 
 def build_order(Order, BSAction, MarketType, PriceType, TimeInForce, OrderType,
@@ -165,13 +272,19 @@ def build_order(Order, BSAction, MarketType, PriceType, TimeInForce, OrderType,
     tif_val = {"ROD": TimeInForce.ROD, "IOC": TimeInForce.IOC, "FOK": TimeInForce.FOK}.get(
         (tif or "ROD").upper(), TimeInForce.ROD)
     ot_val = {"stock": OrderType.Stock,
-              "short": OrderType.ShortSelling,    # 融券賣出（先賣後買當沖）
-              "margin": OrderType.MarginTrading}  # 融資買進
+              # SDK 2.2.x：Short / Margin；舊版名稱 ShortSelling / MarginTrading 相容
+              "short": getattr(OrderType, "Short",
+                               getattr(OrderType, "ShortSelling", OrderType.Stock)),
+              "margin": getattr(OrderType, "Margin",
+                                getattr(OrderType, "MarginTrading", OrderType.Stock)),
+              # 現股當沖（2.2.x 新增；買進+賣出同日標記）
+              "daytrade": getattr(OrderType, "DayTrade", OrderType.Stock)}
     is_market = market_flag or not price
+    # SDK 2.2.x：市價單 price 必須是 None（空字串會被後檯拒絕：'Price should be empty'）
     return Order(
         buy_sell=BSAction.Buy if side == "buy" else BSAction.Sell,
         symbol=symbol,
-        price="" if is_market else str(price),    # 市價單 price 傳空字串
+        price=None if is_market else str(price),
         quantity=int(qty),
         market_type=MarketType.IntradayOdd if odd else MarketType.Common,
         price_type=PriceType.Market if is_market else PriceType.Limit,
@@ -217,8 +330,9 @@ def validate(rest, ticker, acc, symbol, odd, price):
 def describe_order(side, symbol, price, qty, market_flag, odd, tif, ot, user_def):
     is_market = market_flag or not price
     ot_label = {"stock": "Stock(現股)",
-                "short": "ShortSelling(融券賣出/先賣後買)",
-                "margin": "MarginTrading(融資買進)"}[ot]
+                "short": "OrderType.Short（融券賣出/先賣後買）",
+                "margin": "OrderType.Margin（融資買進）",
+                "daytrade": "OrderType.DayTrade（現股當沖）"}[ot]
     return {
         "buy_sell": f"BSAction.{'Buy' if side == 'buy' else 'Sell'}",
         "symbol": symbol,
@@ -258,8 +372,9 @@ def do_dry(cfg, args):
 
     is_market = args.market or not args.price
     price_repr = "''" if is_market else f"'{args.price}'"
-    ot_name = {"stock": "OrderType.Stock", "short": "OrderType.ShortSelling",
-               "margin": "OrderType.MarginTrading"}[args.ot]
+    ot_name = {"stock": "OrderType.Stock", "short": "OrderType.Short",
+               "margin": "OrderType.Margin",
+               "daytrade": "OrderType.DayTrade"}[args.ot]
 
     print(BANNER)
     print(f"【DRY-RUN｜下單參數輸出】PLACE_ORDER={os.environ.get('PLACE_ORDER', 'false')} → 沒有真實下單")
