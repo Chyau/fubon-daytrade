@@ -651,9 +651,57 @@ def _parse_candle_rows(rows):
     return bars
 
 
+def ensure_realtime(sdk):
+    """初始化行情（idempotent）：呼叫 init_realtime() 並確認 sdk.marketdata 就緒。
+
+    實測（SDK 2.2.8）：init_realtime() 回傳 None 但會「生出」sdk.marketdata
+    （rest_client + websocket_client）；憑證登入即可，不需 API Key。
+    成功回傳 sdk.marketdata，失敗回傳 None。
+    """
+    try:
+        if getattr(sdk, "marketdata", None) is None:
+            sdk.init_realtime()
+        return getattr(sdk, "marketdata", None)
+    except Exception:
+        return None
+
+
+def fetch_intraday_trades(sdk, symbol, limit=500):
+    """逐筆成交（內外盤原料）：marketdata REST intraday.trades。
+
+    實測回應：data = [{'bid', 'ask', 'price', 'size'(本筆量), 'volume'(累積),
+    'time'(微秒), 'serial'}, ...]
+    回傳 orderflow 相容 ticks：[{'price', 'volume'(=size), 'bid', 'ask'}, ...]
+    """
+    md = ensure_realtime(sdk)
+    if md is None:
+        return []
+    try:
+        r = md.rest_client.stock.intraday.trades(symbol=str(symbol), limit=int(limit))
+        d = dig(r, "data")
+        items = d if isinstance(d, list) else (dig(d, "tick") or [])
+    except Exception:
+        return []
+    out = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        try:
+            out.append({"price": it.get("price"),
+                        "volume": it.get("size") or it.get("volume") or 0,
+                        "bid": it.get("bid"),
+                        "ask": it.get("ask")})
+        except Exception:
+            continue
+    return out
+
+
 def fetch_intraday_bars(sdk, symbol, timeframe="5"):
-    """最新交易日的 5 分K（富邦行情；需先 sdk.init_realtime()）"""
-    res = sdk.marketdata.rest_client.stock.intraday.candles(symbol=symbol, timeframe=timeframe)
+    """最新交易日的 5 分K（富邦行情；自動 init_realtime）"""
+    md = ensure_realtime(sdk)
+    if md is None:
+        return []
+    res = md.rest_client.stock.intraday.candles(symbol=symbol, timeframe=timeframe)
     return _parse_candle_rows(dig(res, "data") or dig(res, "raw") or [])
 
 

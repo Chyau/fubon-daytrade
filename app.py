@@ -484,7 +484,7 @@ def live_page():
 {% for s in st.of_signals[:12] %}<tr><td>{{s.time}}</td><td><b>{{s.symbol}}</b></td>
 <td><b>{{s.kind}}</b></td><td class="muted" style="font-size:11px">{{s.detail}}</td></tr>{% endfor %}</table>
 <p class="muted">TREND=順勢｜DIVERGE_BUY=內盤高但價漲（承接）｜DIVERGE_SELL=外盤高但價跌（出貨）</p></div>
-{% else %}<p class="muted">內外盤觀察未啟用（.env 設 FUBON_API_KEY 後自動開啟）</p>{% endif %}
+{% else %}<p class="muted">內外盤觀察未啟用（需富邦 SDK＋憑證登入；重啟 app 自動偵測）</p>{% endif %}
 <div class="card"><h2>即時事件流（最新 30 筆）</h2>
 {% if not st.events %}<p class="muted">尚無事件——引擎運行後，長黑K觸發／進場／停損下移／出場都會顯示於此並寫入資料庫</p>{% endif %}
 <table><tr><th>時間</th><th>標的</th><th>事件</th><th>原因碼</th><th>詳情</th></tr>

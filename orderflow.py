@@ -81,8 +81,18 @@ class OrderFlowTracker:
 
     def feed_one(self, price, volume, bid=None, ask=None):
         side = classify_tick(price, bid, ask, self._prev_price)
-        if side == 0 and self._buf:
-            side = self._buf[-1][0]      # 平盤→沿用前筆方向（台股慣例）
+        if side == 0:
+            if self._buf:
+                side = self._buf[-1][0]  # 平盤→沿用前筆方向（台股慣例）
+            else:
+                # 首筆無法判定→不計入統計，但記住價格供下一筆 tick rule
+                try:
+                    fp = float(price)
+                    if fp > 0:
+                        self._prev_price = fp
+                except (TypeError, ValueError):
+                    pass
+                return side
         try:
             vol = max(0, int(volume or 0))
         except (TypeError, ValueError):
@@ -110,17 +120,17 @@ class OrderFlowTracker:
 
     def stats(self):
         n = len(self._buf)
-        buy_vol = sell_vol = total = 0
+        buy_vol = sell_vol = 0
         px_first = px_last = None
         for side, vol, p in self._buf:
-            total += vol
-            if side >= 0:
-                buy_vol += vol
-            if side <= 0:
-                sell_vol += vol
+            if side > 0:
+                buy_vol += vol           # 外盤量（互斥；占比相加=100%）
+            elif side < 0:
+                sell_vol += vol          # 內盤量
             if px_first is None:
                 px_first = p
             px_last = p
+        total = buy_vol + sell_vol
         buy_ratio = (buy_vol / total) if total else 0.0
         sell_ratio = (sell_vol / total) if total else 0.0
         chg = ((px_last / px_first) - 1.0) if (px_first and px_last) else 0.0

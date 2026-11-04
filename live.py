@@ -77,10 +77,11 @@ class LiveEngine:
             self._seen, self._sent, self._recorded = set(), set(), set()
             self.of_trackers, self._of_seen = {}, set()
             self.state["of_signals"] = []
-            # 內外盤觀察模式：.env 有 FUBON_API_KEY 才啟用（REST 逐筆，僅記錄）
+            # 內外盤觀察模式：富邦 SDK + 憑證即可（行情 REST 實測不需 API Key）
             try:
-                import orderflow as _ofm
-                self.state["of_on"] = _ofm.has_api_key()
+                import fubon_orders as _fo
+                self.state["of_on"] = _fo.has_sdk() and bool(
+                    os.environ.get("FUBON_TEST_ID") or os.environ.get("FUBON_LIVE_ID"))
             except Exception:
                 self.state["of_on"] = False
             self.of_rest = None
@@ -188,21 +189,21 @@ class LiveEngine:
 
     def _orderflow_check(self, sym):
         """內外盤觀察模式：REST 逐筆 → tracker → 訊號只記錄（不下單）。
-        需 .env 有 FUBON_API_KEY；任何失敗都不影響主迴圈。"""
+        憑證登入 + init_realtime 即有行情（實測不需 API Key）；
+        任何失敗都不影響主迴圈。"""
         if not self.state.get("of_on"):
             return
         try:
             import orderflow as ofm
-            if self.of_rest is None:
-                self.of_rest = ofm.build_rest_client()
-            if self.of_rest is None:
+            sdk, acc = self._ensure_sdk()
+            if fo.ensure_realtime(sdk) is None:
                 self.state["of_on"] = False
-                log.warning("內外盤觀察停用：REST client 建立失敗（檢查 API Key/套件）")
+                log.warning("內外盤觀察停用：marketdata 初始化失敗（檢查 SDK/憑證）")
                 return
             tr = self.of_trackers.get(sym)
             if tr is None:
                 tr = self.of_trackers[sym] = ofm.OrderFlowTracker()
-            ticks = ofm.fetch_ticks_rest(self.of_rest, sym)
+            ticks = fo.fetch_intraday_trades(sdk, sym)
             if ticks:
                 tr.feed(ticks)
             sig = tr.signal()
