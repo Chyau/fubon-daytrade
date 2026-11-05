@@ -50,6 +50,8 @@ class LiveEngine:
         self._sent = set()       # (symbol, date, kind) 已送單
         self._recorded = set()   # (symbol, date) 已入庫交易
         self.of_rest = None      # 內外盤 REST client（惰性建立；需 FUBON_API_KEY）
+        self._entry_ok = set()   # (sym,date) 進場單成功送出的紀錄
+        self._backfill = set()   # (sym,date) 歷史回放交易（不送單）
         self.of_trackers = {}    # symbol → OrderFlowTracker
         self._of_seen = set()    # (symbol, minute, kind) 已記錄訊號
         self.state = {
@@ -103,6 +105,7 @@ class LiveEngine:
                 "last_error": None, "cycles": 0})
             self._seen, self._sent, self._recorded = set(), set(), set()
             self.of_trackers, self._of_seen = {}, set()
+            self._entry_ok, self._backfill = set(), set()
             self.state["of_signals"] = []
             # 內外盤觀察模式：富邦 SDK + 憑證即可（行情 REST 實測不需 API Key）
             self.state["of_on"] = orderflow_available()
@@ -370,10 +373,17 @@ class LiveEngine:
                     or self.state.get("direction", "short")
                 if kind == "ENTRY" and (sym, date, "entry") not in self._sent:
                     self._sent.add((sym, date, "entry"))
-                    if _t_dir == "long":
-                        self._order(sym, "buy", "stock", "進場買進")
+                    if (t.get("entry_time") or "") < (self.state.get("started_at") or "99:99")[:5]:
+                        # 歷史回放交易：價格是過去的，市價單送出無意義 → 不送單
+                        self._backfill.add((sym, date))
+                        self.log_event(sym, "BACKFILL_SKIP",
+                                       f"引擎啟動前的歷史交易（進場 {t.get('entry_time')}）不送單")
+                        log.info(f"[live][{sym}] 歷史回放交易（{t.get('entry_time')}）"
+                                 f"→ 僅入庫不送單")
+                    elif _t_dir == "long":
+                        self._order(sym, "buy", "stock", "進場買進", date=date)
                     else:
-                        self._order(sym, "sell", "short", "進場放空")
+                        self._order(sym, "sell", "short", "進場放空", date=date)
                     # 進階保護：同步下「停損買回條件單」（環境變數開關，預設關）
                     if os.environ.get("LIVE_AUTO_CONDITION") == "1":
                         try:
@@ -387,10 +397,15 @@ class LiveEngine:
                             log.error(f"[live][{sym}] 停損條件單建立失敗：{ce}")
                 elif kind == "EXIT" and (sym, date, "exit") not in self._sent:
                     self._sent.add((sym, date, "exit"))
-                    if _t_dir == "long":
-                        self._order(sym, "sell", "stock", f"出場賣出（{reason}）")
+                    if (sym, date) in self._backfill or (sym, date) not in self._entry_ok:
+                        # 歷史回放／進場被擋或失敗 → 沒有真實部位，出場不送單
+                        self.log_event(sym, "EXIT_SKIP_ORDER",
+                                       f"進場未實際下單（回放或被擋）→ 出場不送單")
+                        log.info(f"[live][{sym}] 出場不送單（進場未實際成交）")
+                    elif _t_dir == "long":
+                        self._order(sym, "sell", "stock", f"出場賣出（{reason}）", date=date)
                     else:
-                        self._order(sym, "buy", "stock", f"出場買回（{reason}）")
+                        self._order(sym, "buy", "stock", f"出場買回（{reason}）", date=date)
         # 完成交易入庫（每 (標的,日期) 一次）
         if t and t.get("exit_price") is not None and (sym, date) not in self._recorded:
             self._recorded.add((sym, date))
@@ -402,7 +417,9 @@ class LiveEngine:
                 _feat = _json.loads(t2.get("features") or "{}")
                 if "market_dir" not in _feat:
                     _feat["market_dir"] = self._market_dir()
-                    t2["features"] = _json.dumps(_feat, ensure_ascii=False)
+                _feat.setdefault("entry_mode", self.state.get("entry_mode", "next_open"))
+                _feat.setdefault("direction", self.state.get("direction", "short"))
+                t2["features"] = _json.dumps(_feat, ensure_ascii=False)
             except Exception:
                 pass
             conn = tdb.connect()
@@ -443,7 +460,7 @@ class LiveEngine:
                 raise RuntimeError(str(e))
         return self.state["sdk"], self.state["acc"]
 
-    def _order(self, sym, side, ot, note):
+    def _order(self, sym, side, ot, note, date=None):
         try:
             sdk, acc = self._ensure_sdk()
             # 當沖/融券資格預檢（僅進場單；出場一律放行；FUBON_GATE=0 可關閉）
@@ -474,20 +491,29 @@ class LiveEngine:
             data = fo.dig(res, "data")
             no = fo.dig(data, "order_no") if data else None
             ok = bool(fo.dig(res, "is_success", True))
+            msg = fo.dig(res, "message")
             log.info(f"[live][{sym}] {note} 送單 order_no={no} ok={ok} "
-                     f"user_def={self.MY_ORDER_TAG}")
+                     f"user_def={self.MY_ORDER_TAG}"
+                     + (f"｜message={msg}" if not ok else ""))
+            if not ok:
+                self.log_event(sym, "ORDER_FAIL_MSG", str(msg or "")[:120])
             if no:   # 記住自己的委託書號（共用沙箱帳號下，查單只認自己的）
                 self.state.setdefault("my_orders", []).append(
                     {"order_no": str(no), "symbol": sym, "side": side,
                      "time": datetime.now().strftime("%H:%M:%S")})
                 del self.state["my_orders"][:-50]
+                if note.startswith("進場") and date:
+                    self._entry_ok.add((sym, str(date)))
             conn = tdb.connect()
             try:
                 tdb.record_order(conn, mode="test", symbol=sym, side=side,
                                  order_type=ot, quantity=1000, price="",
                                  price_type="Market", market_type="Common", tif="ROD",
-                                 user_def="FSDT", order_no=str(no) if no else None,
-                                 is_success=int(ok), message=f"live {note}", raw="")
+                                 user_def=self.MY_ORDER_TAG,
+                                 order_no=str(no) if no else None,
+                                 is_success=int(ok),
+                                 message=(f"live {note}｜{msg}" if not ok
+                                          else f"live {note}"), raw="")
             finally:
                 conn.close()
             self.log_event(sym, "ORDER", f"{note} order_no={no} ok={ok}")
