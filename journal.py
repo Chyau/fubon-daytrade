@@ -62,6 +62,8 @@ DIMS = {
     "gap_band": _gap_band,
     "entry_mode": lambda t: _feat(t).get("entry_mode") or "?",
     "t_direction": lambda t: _feat(t).get("direction") or "?",
+    "prev_chg_band": lambda t: strategy.prev_chg_band(
+        _feat(t).get("prev_day_chg")),
     "month": lambda t: (t["date"] or "")[5:7] + "月" or "?",
     "symbol": lambda t: t["symbol"],
     "exit_reason": lambda t: t["exit_reason"] or "?",
@@ -201,7 +203,8 @@ def cmd_rules(conn, add, add_dim, add_value, name, from_pit, approve, revoke, no
             print(f"找不到坑點 #{from_pit}（先用 `pits --save` 將挖掘結果入庫）")
             return
         ok_dims = ("trigger_bucket", "weekday", "symbol", "body_pct_band",
-                   "vol_ratio_band", "pattern", "entry_mode", "t_direction")
+                   "vol_ratio_band", "pattern", "entry_mode", "t_direction",
+                   "prev_chg_band")
         if pit["dimension"] not in ok_dims:
             print(f"⛔ 坑點 #{from_pit} 的維度「{pit['dimension']}」屬結果歸因（進場前不可得），"
                   f"不可作為進場規則。\n   可用維度：{','.join(ok_dims)}")
@@ -263,7 +266,8 @@ def mine_auto_rules(conn, min_n=10, gap=0.2):
         return []
     base = sum(1 for r in rows if (r["net_pnl"] or 0) <= 0) / len(rows)
     entry_dims = ("trigger_bucket", "weekday", "symbol", "body_pct_band",
-                  "vol_ratio_band", "pattern", "entry_mode", "t_direction")
+                  "vol_ratio_band", "pattern", "entry_mode", "t_direction",
+                  "prev_chg_band")
     rules = []
     for dim in entry_dims:
         fn = DIMS.get(dim)

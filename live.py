@@ -375,6 +375,28 @@ class LiveEngine:
         self.state["mkt_date"], self.state["mkt_dir"] = today, d
         return d
 
+    def _prev_day_chg(self, sym):
+        """前日漲幅%（昨收 vs 前昨收）——每 (sym, 今日) 算一次後快取；失敗回 None
+        資料源：富邦 5 分K 組日收盤（沙箱/正式皆可；排除今日盤中未完K）。
+        用途：prev_chg_band 學習維度（漲停/大跌次日的進場績效由迴路驗證）"""
+        today = datetime.now().strftime("%Y-%m-%d")
+        cache = self.state.setdefault("prev_chg", {})
+        if sym in cache:
+            return cache[sym]
+        chg = None
+        try:
+            bars = fo.fetch_fubon_history(sym, days_back=7, timeframe="5") or []
+            closes = {}
+            for b in bars:
+                closes[b["date"]] = b["close"]   # 依時序覆蓋 → 每日收盤
+            days = sorted(d for d in closes if d < today)
+            if len(days) >= 2 and closes[days[-2]]:
+                chg = round((closes[days[-1]] / closes[days[-2]] - 1) * 100, 2)
+        except Exception as e:
+            log.debug(f"[live][{sym}] 前日漲幅取得失敗：{e}")
+        cache[sym] = chg
+        return chg
+
     # ---------- 事件處理 ----------
     def _handle(self, sym, date, res, bars):
         events = list(res["signals"] or [])
@@ -457,6 +479,8 @@ class LiveEngine:
                     _feat["market_dir"] = self._market_dir()
                 _feat.setdefault("entry_mode", self.state.get("entry_mode", "next_open"))
                 _feat.setdefault("direction", self.state.get("direction", "short"))
+                if "prev_day_chg" not in _feat:
+                    _feat["prev_day_chg"] = self._prev_day_chg(sym)
                 t2["features"] = _json.dumps(_feat, ensure_ascii=False)
             except Exception:
                 pass

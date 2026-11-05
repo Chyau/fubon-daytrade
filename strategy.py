@@ -207,6 +207,26 @@ def body_pct_band(bp):
     return "<0.7" if bp < 0.7 else ("0.7-1.2" if bp <= 1.2 else ">1.2")
 
 
+def prev_chg_band(v):
+    """前日漲幅%分桶（進場前即可判定 → 可作為避坑規則維度）
+    動機（逐字稿 2026-11 當沖教學）：漲跌停次日的極端動能；漲停次日做空
+    在日K統計為小正（+0.29%）但含漲停鎖死回補風險 → 交由學習迴路以引擎
+    實際交易數據判定，不硬編規則。"""
+    if v is None:
+        return "?"
+    if v <= -9:
+        return "跌停(≤-9%)"
+    if v <= -3:
+        return "大跌(-9~-3%)"
+    if v < 0:
+        return "小跌(-3~0)"
+    if v < 3:
+        return "小漲(0~3%)"
+    if v < 9:
+        return "大漲(3~9%)"
+    return "漲停(≥9%)"
+
+
 def vol_ratio_band(v):
     """量能比分桶（進場當下即可判定 → 可作為避坑規則維度）
     統計發現：縮量長黑（<1 倍）假跌破率 88%；爆量（≥3 倍）僅 50%"""
@@ -453,6 +473,7 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     "weekday": weekday_of(date_str),
                     "direction": direction,
                     "entry_mode": cfg.get("entry_mode", "next_open"),
+                    "prev_day_chg": cfg.get("prev_day_chg"),
                     "entry_price": entry, "initial_stop": init_stop,
                     "risk_per_share": round(abs(entry - init_stop), 3),
                     "risk_budget": cfg["risk_budget"] or None, "lots": lots,
@@ -525,7 +546,8 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                        "vol_ratio_band": vol_ratio_band(feat.get("vol_ratio")),
                        "pattern": feat.get("pattern", ""),
                        "entry_mode": cfg.get("entry_mode", "next_open"),
-                       "t_direction": direction}
+                       "t_direction": direction,
+                       "prev_chg_band": prev_chg_band(cfg.get("prev_day_chg"))}
                 blk = blocked_by_rules(rules or [], ctx)
                 if blk:  # 學習迴路：核准的避坑規則擋下進場
                     signals.append({"date": date_str, "symbol": symbol,
@@ -700,7 +722,8 @@ def run_day_redpacket(day_bars, cfg, symbol, date_str, log=None, rules=None):
             ctx = {"symbol": symbol, "weekday": weekday_of(date_str),
                    "trigger_bucket": trigger_bucket(b["hhmm"]),
                    "pattern": "RP破底", "entry_mode": "redpacket",
-                   "t_direction": "short"}
+                   "t_direction": "short",
+                   "prev_chg_band": prev_chg_band(cfg.get("prev_day_chg"))}
             blk = blocked_by_rules(rules or [], ctx)
             mb = (cfg.get("market_bias_map") or {}).get(date_str)
             if not enough:
@@ -757,6 +780,7 @@ def run_day_redpacket(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     "vol_since_low": vol_since_low,
                     "weekday": weekday_of(date_str),
                     "entry_mode": "redpacket", "direction": "short",
+                    "prev_day_chg": cfg.get("prev_day_chg"),
                     "trigger_bucket": trigger_bucket(b["hhmm"])}
             t = {"date": date_str, "symbol": symbol, "direction": "short",
                  "trigger_time": b["hhmm"], "trigger_open": day_low,
@@ -833,7 +857,8 @@ def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
                 blk = blocked_by_rules(rules or [], {
                     "symbol": symbol, "weekday": weekday_of(date_str),
                     "trigger_bucket": trigger_bucket(b["hhmm"]),
-                    "pattern": "B1", "entry_mode": "b12", "t_direction": "long"})
+                    "pattern": "B1", "entry_mode": "b12", "t_direction": "long",
+                    "prev_chg_band": prev_chg_band(cfg.get("prev_day_chg"))})
                 if blk:
                     signals.append({"date": date_str, "symbol": symbol,
                                     "ts": f"{date_str} {b['hhmm']}",
@@ -873,6 +898,7 @@ def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
                 feat = {"pattern": "B1", "pb_low": stop, "weekday": weekday_of(date_str),
                         "trigger_bucket": trigger_bucket(b["hhmm"]),
                         "entry_mode": "b12", "direction": "long",
+                        "prev_day_chg": cfg.get("prev_day_chg"),
                         "body_pct_band": body_pct_band(
                             abs(c - o) / o * 100 if o else 0)}
                 t = {"date": date_str, "symbol": symbol, "direction": "long",

@@ -221,15 +221,19 @@ def run_backtest(bars, cfg, symbol, run_id, log, save=True, use_rules=True):
             log.info(f"隔日沖回測完成 run_id={run_id}：{len(trades)} 筆"
                      f"（已寫入 {tdb.DB_PATH}）")
         return trades
-    prev_day_close = None
+    prev2_close = prev_day_close = None   # 前日漲幅（prev_day_chg）用：昨收 vs 前昨收
     dir_map = cfg.get("market_dir_map") or cfg.get("market_bias_map") or {}
     for date in sorted(days):
         cfg_day = cfg
         if cfg.get("entry_mode") == "b12_long" and prev_day_close:
             cfg_day = {**cfg, "b12_prev_close": prev_day_close}
+        if prev2_close and prev_day_close:
+            # 前日漲幅%（學習維度：漲停/大跌次日的進場績效由迴路自行驗證）
+            cfg_day = {**cfg_day, "prev_day_chg":
+                       round((prev_day_close / prev2_close - 1) * 100, 2)}
         pc = prev_day_close          # 昨收（run_day 前先取，下方才會更新為今日收）
         res = strategy.run_day(days[date], cfg_day, symbol, date, log=log, rules=rules)
-        prev_day_close = days[date][-1]["close"]
+        prev2_close, prev_day_close = prev_day_close, days[date][-1]["close"]
         for sig in res["signals"]:
             if save:
                 tdb.record_signal(conn, sig["date"], sig["symbol"], sig["ts"],

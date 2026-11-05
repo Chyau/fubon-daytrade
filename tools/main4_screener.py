@@ -155,10 +155,13 @@ def cmd_scan(db_path=TWDB, save=True):
         chg = bars[i]["c"] / bars[i - 1]["c"] - 1 if bars[i - 1]["c"] else 0
         # ⚡漲停清單（實證最有 edge 的方向：limitup_next 次日動能做多）
         if chg >= P["limit_pct"]:
+            amp20 = (_mean([(b["h"] - b["l"]) / b["c"] for b in bars[-20:]
+                            if b["c"]]) * 100)
             out["limitup"].append({"stock_no": sym, "date": bars[i]["date"],
-                                   "close": bars[i]["c"], "chg_pct": round(chg * 100, 1)})
-            log.info(f"{sym} 漲停（+{chg*100:.1f}%）收 {bars[i]['c']} → "
-                     f"明日 limitup_next 候選（跳空≤1% 才進、停損跌回漲停價）")
+                                   "close": bars[i]["c"], "chg_pct": round(chg * 100, 1),
+                                   "amp20_pct": round(amp20, 1)})
+            log.info(f"{sym} 漲停（+{chg*100:.1f}%）收 {bars[i]['c']}｜20日均振幅 {amp20:.1f}%"
+                     f" → 明日 limitup_next 候選（跳空≤1% 才進、停損跌回漲停價）")
         if not d:
             continue
         if d["score"] >= 3 or (d["s1"] and d["s2"]):
