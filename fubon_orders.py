@@ -109,7 +109,11 @@ def filter_my_orders(rows, user_def="FSDT", order_nos=None):
     辨別依據（任一符合）：
       1. user_def == user_def 參數（下單時蓋的章，回報原封帶回）
       2. order_no 在 order_nos 白名單（place_order 回傳時自己記下來的）
-    """
+
+    ⚠沙箱實測（2026-11-05 盤後）：融券（Short）預約單的 user_def 會被沙箱
+    吃掉變 ' '、order_no=None、status=0 → 只能靠 order_nos 白名單辨識。
+    盤中委託則 order_no 正常回傳。清理殘留單時不能用 user_def 過濾，
+    要掃全部 Short+Sell 未完成單。"""
     nos = {str(n) for n in (order_nos or ())}
     out = []
     for r in rows or []:
