@@ -144,8 +144,18 @@ def place_entry_daytrade(sdk, acc, symbol, qty, trigger, side="sell", cmp_op="gt
 
 
 def list_orders(sdk, acc):
+    """回傳條件單清單（list）。get_condition_order 回 CustomReturnType → 拆 data"""
     res = sdk.stock.get_condition_order(acc)
-    return res
+    data = dig_data(res)
+    return data if isinstance(data, list) else [data] if data else []
+
+
+def dig_data(res):
+    """拆 CustomReturnType：data 可能是 list 或單一物件"""
+    d = getattr(res, "data", None)
+    if d is None:
+        return []
+    return d if isinstance(d, list) else [d]
 
 
 def cancel_order(sdk, acc, guid):
