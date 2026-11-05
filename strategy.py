@@ -452,6 +452,7 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     "trigger_bucket": trigger_bucket(trigger["hhmm"]),
                     "weekday": weekday_of(date_str),
                     "direction": direction,
+                    "entry_mode": cfg.get("entry_mode", "next_open"),
                     "entry_price": entry, "initial_stop": init_stop,
                     "risk_per_share": round(abs(entry - init_stop), 3),
                     "risk_budget": cfg["risk_budget"] or None, "lots": lots,
@@ -522,7 +523,9 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                        "trigger_bucket": trigger_bucket(b["hhmm"]),
                        "body_pct_band": body_pct_band(feat.get("body_pct", 0.0)),
                        "vol_ratio_band": vol_ratio_band(feat.get("vol_ratio")),
-                       "pattern": feat.get("pattern", "")}
+                       "pattern": feat.get("pattern", ""),
+                       "entry_mode": cfg.get("entry_mode", "next_open"),
+                       "t_direction": direction}
                 blk = blocked_by_rules(rules or [], ctx)
                 if blk:  # 學習迴路：核准的避坑規則擋下進場
                     signals.append({"date": date_str, "symbol": symbol,
@@ -695,7 +698,9 @@ def run_day_redpacket(day_bars, cfg, symbol, date_str, log=None, rules=None):
             need = cum_vol * float(cfg.get("rp_vol_ratio", 0.5))
             enough = vol_since_low >= need
             ctx = {"symbol": symbol, "weekday": weekday_of(date_str),
-                   "trigger_bucket": trigger_bucket(b["hhmm"])}
+                   "trigger_bucket": trigger_bucket(b["hhmm"]),
+                   "pattern": "RP破底", "entry_mode": "redpacket",
+                   "t_direction": "short"}
             blk = blocked_by_rules(rules or [], ctx)
             mb = (cfg.get("market_bias_map") or {}).get(date_str)
             if not enough:
@@ -751,6 +756,7 @@ def run_day_redpacket(day_bars, cfg, symbol, date_str, log=None, rules=None):
             feat = {"pattern": "RP破底", "day_low": day_low,
                     "vol_since_low": vol_since_low,
                     "weekday": weekday_of(date_str),
+                    "entry_mode": "redpacket", "direction": "short",
                     "trigger_bucket": trigger_bucket(b["hhmm"])}
             t = {"date": date_str, "symbol": symbol, "direction": "short",
                  "trigger_time": b["hhmm"], "trigger_open": day_low,
@@ -823,6 +829,21 @@ def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
             pb_low = min(pb_low, l)
             # B1：重新突破開盤價（收盤確認或盤中觸及皆可）
             if h > op and b["hhmm"] <= cfg["entry_cutoff"]:
+                # 學習迴路：核准的避坑規則擋下進場（先於其他檢查）
+                blk = blocked_by_rules(rules or [], {
+                    "symbol": symbol, "weekday": weekday_of(date_str),
+                    "trigger_bucket": trigger_bucket(b["hhmm"]),
+                    "pattern": "B1", "entry_mode": "b12", "t_direction": "long"})
+                if blk:
+                    signals.append({"date": date_str, "symbol": symbol,
+                                    "ts": f"{date_str} {b['hhmm']}",
+                                    "event": "RULE_BLOCK", "reason": "E_RULE_BLOCK",
+                                    "detail": json.dumps({"rule": blk["name"]},
+                                                         ensure_ascii=False)})
+                    if log:
+                        log.info(f"[{date_str}] {symbol} 規則擋下 B1 進場：{blk['name']}")
+                    below_seen = False
+                    continue
                 # 大盤風向過濾：做多模式在大盤跌日不進場（與 run_day 同語意）
                 mb = (cfg.get("market_bias_map") or {}).get(date_str)
                 if mb and mb == "down":
@@ -851,6 +872,7 @@ def run_day_b12(day_bars, cfg, symbol, date_str, log=None, rules=None):
                         if cfg["risk_budget"] > 0 else max(1, int(cfg.get("lots", 1))))
                 feat = {"pattern": "B1", "pb_low": stop, "weekday": weekday_of(date_str),
                         "trigger_bucket": trigger_bucket(b["hhmm"]),
+                        "entry_mode": "b12", "direction": "long",
                         "body_pct_band": body_pct_band(
                             abs(c - o) / o * 100 if o else 0)}
                 t = {"date": date_str, "symbol": symbol, "direction": "long",

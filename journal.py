@@ -60,6 +60,8 @@ DIMS = {
     "market_dir": lambda t: {"up": "大盤漲", "down": "大盤跌"}.get(
         _feat(t).get("market_dir"), "?"),
     "gap_band": _gap_band,
+    "entry_mode": lambda t: _feat(t).get("entry_mode") or "?",
+    "t_direction": lambda t: _feat(t).get("direction") or "?",
     "month": lambda t: (t["date"] or "")[5:7] + "月" or "?",
     "symbol": lambda t: t["symbol"],
     "exit_reason": lambda t: t["exit_reason"] or "?",
@@ -199,7 +201,7 @@ def cmd_rules(conn, add, add_dim, add_value, name, from_pit, approve, revoke, no
             print(f"找不到坑點 #{from_pit}（先用 `pits --save` 將挖掘結果入庫）")
             return
         ok_dims = ("trigger_bucket", "weekday", "symbol", "body_pct_band",
-                   "vol_ratio_band", "pattern")
+                   "vol_ratio_band", "pattern", "entry_mode", "t_direction")
         if pit["dimension"] not in ok_dims:
             print(f"⛔ 坑點 #{from_pit} 的維度「{pit['dimension']}」屬結果歸因（進場前不可得），"
                   f"不可作為進場規則。\n   可用維度：{','.join(ok_dims)}")
@@ -261,7 +263,7 @@ def mine_auto_rules(conn, min_n=10, gap=0.2):
         return []
     base = sum(1 for r in rows if (r["net_pnl"] or 0) <= 0) / len(rows)
     entry_dims = ("trigger_bucket", "weekday", "symbol", "body_pct_band",
-                  "vol_ratio_band", "pattern")
+                  "vol_ratio_band", "pattern", "entry_mode", "t_direction")
     rules = []
     for dim in entry_dims:
         fn = DIMS.get(dim)
@@ -315,6 +317,13 @@ def main():
     p.add_argument("--revoke", type=int, metavar="ID")
     p.add_argument("--delete", type=int, metavar="ID", help="刪除規則（含重複項清理）")
     p.add_argument("--note")
+    p.add_argument("--auto-generate", action="store_true",
+                   help="⚡自動風控：從交易數據挖掘避坑規則（樣本≥--auto-min-n、"
+                        "虧損率−基準≥--auto-gap、avgR<0）")
+    p.add_argument("--approve-auto", action="store_true",
+                   help="自動生成後直接核准（預設僅生成待人工審查）")
+    p.add_argument("--auto-min-n", type=int, default=10)
+    p.add_argument("--auto-gap", type=float, default=0.2)
     a = ap.parse_args()
     log = get_logger("journal", a.log_level)
     conn = tdb.connect()
@@ -329,7 +338,9 @@ def main():
         cmd_report(conn, a.run_id)
     elif a.cmd == "rules":
         cmd_rules(conn, a.add, a.add_dim, a.add_value, a.name, a.from_pit,
-                  a.approve, a.revoke, a.note, log, a.delete)
+                  a.approve, a.revoke, a.note, log, a.delete,
+                  auto_generate=a.auto_generate, auto_min_n=a.auto_min_n,
+                  auto_gap=a.auto_gap, approve_auto=a.approve_auto)
     conn.close()
 
 
