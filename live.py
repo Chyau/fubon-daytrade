@@ -53,6 +53,7 @@ class LiveEngine:
         self._entry_ok = set()   # (sym,date) 進場單成功送出的紀錄
         self._backfill = set()   # (sym,date) 歷史回放交易（不送單）
         self.of_trackers = {}    # symbol → OrderFlowTracker
+        self._of_last = {}       # symbol → 上次訊號 kind（狀態機）
         self._of_seen = set()    # (symbol, minute, kind) 已記錄訊號
         self.state = {
             "running": False, "mode": "dry", "source": "yf", "symbols": [],
@@ -62,6 +63,7 @@ class LiveEngine:
             "started_at": None, "last_check": None, "last_error": None,
             "cycles": 0, "events": [], "open_pos": {},
             "of_on": orderflow_available(), "of_signals": [],
+            "of_paper_open": {}, "of_paper": [],
         }
 
     # ---------- 對外控制 ----------
@@ -105,6 +107,8 @@ class LiveEngine:
                 "last_error": None, "cycles": 0})
             self._seen, self._sent, self._recorded = set(), set(), set()
             self.of_trackers, self._of_seen = {}, set()
+            self._of_last = {}
+            self.state["of_paper_open"], self.state["of_paper"] = {}, []
             self._entry_ok, self._backfill = set(), set()
             self.state["of_signals"] = []
             # 內外盤觀察模式：富邦 SDK + 憑證即可（行情 REST 實測不需 API Key）
@@ -216,18 +220,52 @@ class LiveEngine:
             if ticks:
                 tr.feed(ticks)
             sig = tr.signal()
+            now_s = datetime.now().strftime("%H:%M:%S")
+            px = tr.stats()["px_last"]
+            # ---- A-1 虛擬帳戶：持倉管理（停損/目標/反訊號平倉）----
+            open_pt = self.state.get("of_paper_open", {}).get(sym)
+            if open_pt and px:
+                d = open_pt["dir"]
+                chg = ((px / open_pt["entry"]) - 1) * (1 if d == "long" else -1)
+                hit_stop = chg <= -float(os.environ.get("OF_PAPER_STOP", "0.01"))
+                hit_tgt = chg >= float(os.environ.get("OF_PAPER_TARGET", "0.02"))
+                flip = (sig is not None and (
+                    (d == "long" and sig["kind"] in ("TREND_SHORT", "DIVERGE_SELL"))
+                    or (d == "short" and sig["kind"] in ("TREND_LONG", "DIVERGE_BUY"))))
+                if hit_stop or hit_tgt or flip:
+                    pnl_pct = round(chg * 100, 2)
+                    why = ("停損" if hit_stop else "達標" if hit_tgt else "反訊號")
+                    self.state["of_paper"].insert(0, {
+                        "symbol": sym, "dir": d, "entry": open_pt["entry"],
+                        "exit": px, "pnl_pct": pnl_pct, "why": why,
+                        "kind": open_pt["kind"], "time": now_s})
+                    del self.state["of_paper"][40:]
+                    self.state["of_paper_open"].pop(sym, None)
+                    self.log_event(sym, "OF_PAPER_CLOSE",
+                                   f"{open_pt['kind']} {d} {open_pt['entry']}→{px} "
+                                   f"({pnl_pct:+.2f}%, {why})",
+                                   f"E_OF_PAPER_{'WIN' if pnl_pct > 0 else 'LOSE'}")
+                    log.info(f"[內外盤紙上][{sym}] 平倉 {pnl_pct:+.2f}%（{why}）")
+            # ---- A-2 狀態機：訊號「轉變」才觸發（開虛擬倉＋記錄一次）----
             if sig:
-                key = (sym, datetime.now().strftime("%Y%m%d%H%M"), sig["kind"])
-                if key not in self._of_seen:
-                    self._of_seen.add(key)
+                if self._of_last.get(sym) != sig["kind"]:
+                    self._of_last[sym] = sig["kind"]
                     self.state["of_signals"].insert(
-                        0, {"time": datetime.now().strftime("%H:%M:%S"),
-                            "symbol": sym, "kind": sig["kind"],
+                        0, {"time": now_s, "symbol": sym, "kind": sig["kind"],
                             "detail": sig["detail"]})
                     del self.state["of_signals"][40:]
                     self.log_event(sym, "OF_SIGNAL", str(sig["detail"])[:160],
                                    f"E_OF_{sig['kind']}")
                     log.info(f"[內外盤][{sym}] {sig['kind']} {sig['detail']}")
+                    # 虛擬開倉（無持倉時）
+                    if sym not in self.state.get("of_paper_open", {}):
+                        is_long = sig["kind"] in ("TREND_LONG", "DIVERGE_BUY")
+                        self.state.setdefault("of_paper_open", {})[sym] = {
+                            "dir": "long" if is_long else "short",
+                            "entry": px, "time": now_s, "kind": sig["kind"]}
+                        self.log_event(sym, "OF_PAPER_OPEN",
+                                       f"{sig['kind']} {'long' if is_long else 'short'} "
+                                       f"@ {px}", f"E_OF_{sig['kind']}")
         except Exception as e:
             log.warning(f"內外盤觀察失敗（{sym}）：{str(e)[:120]}")
 
@@ -481,6 +519,28 @@ class LiveEngine:
                     return
                 if verdict == "unknown":
                     log.info(f"[live][{sym}] 進場資格查不到（沙箱常態）→ 照常送單")
+            # 內外盤確認過濾（B）：進場時反向訊號擋下（OF_CONFIRM=0 關閉）
+            if (note.startswith("進場") and self.state.get("of_on")
+                    and os.environ.get("OF_CONFIRM", "1") != "0"):
+                _tr = self.of_trackers.get(sym)
+                if _tr is not None:
+                    _st = _tr.stats()
+                    if _st["n"] >= _tr.min_ticks:
+                        _conflict = None
+                        if side == "sell" and (_st["px_chg_pct"] > 0
+                                               and _st["buy_ratio"] >= 0.6):
+                            _conflict = (f"內盤承接價漲（買 {_st['buy_ratio']:.0%}、"
+                                         f"{_st['px_chg_pct']:+.2f}%）逆勢放空")
+                        elif side == "buy" and (_st["px_chg_pct"] < 0
+                                                and _st["sell_ratio"] >= 0.6):
+                            _conflict = (f"外盤出貨價跌（賣 {_st['sell_ratio']:.0%}、"
+                                         f"{_st['px_chg_pct']:+.2f}%）逆勢買進")
+                        if _conflict:
+                            self.log_event(sym, "OF_BLOCK", _conflict, "E_OF_CONFLICT")
+                            log.info(f"[live][{sym}] 內外盤衝突擋下：{_conflict}")
+                            self.state["last_error"] = f"{sym} 內外盤衝突擋下"
+                            return
+
             from fubon_neo.sdk import Order
             from fubon_neo.constant import (BSAction, MarketType, PriceType,
                                             TimeInForce, OrderType)
