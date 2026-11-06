@@ -24,6 +24,7 @@
 其他環境變數：FUBON_USE_TEST / FUBON_TEST_* / FUBON_LIVE_*（見 .env.example）
 """
 import json
+import math
 import os
 import sys
 import time
@@ -345,6 +346,64 @@ def build_order(Order, BSAction, MarketType, PriceType, TimeInForce, OrderType,
         order_type=ot_val.get(ot, OrderType.Stock),
         user_def=(user_def or "ORB")[:10],
     )
+
+
+def tick_size(px):
+    """台股 tick 級距（與 strategy.tick_size 同語意；此處獨立實作避免循環匯入）"""
+    if px < 10:
+        return 0.01
+    if px < 50:
+        return 0.05
+    if px < 100:
+        return 0.1
+    if px < 500:
+        return 0.5
+    if px < 1000:
+        return 1.0
+    return 5.0
+
+
+def order_band(sdk, acc, symbol):
+    """「下單系統」視角的價格帶（官方文件：測試環境判斷可下單價格必用此，
+    行情端 intraday.quote 與下單系統的模擬價脫鉤 — 2026-11-06 實測：
+    2317 行情 227 vs 下單系統參考價 89.9）。
+
+    回傳 {"ref","up","down","last"} 或 None（查詢失敗）。
+    正式環境：ref=昨收、up/down=真實漲跌停 → 夾帶為無副作用。"""
+    try:
+        q = dig(sdk.stock.query_symbol_quote(acc, symbol), "data")
+        raw = dig(q, "raw") or q
+        ref = float(dig(raw, "reference_price") or 0)
+        up = float(dig(raw, "limitup_price") or 0)
+        dn = float(dig(raw, "limitdown_price") or 0)
+        last = float(dig(raw, "last_price") or 0)
+        if ref <= 0:
+            return None
+        return {"ref": ref, "up": up, "down": dn, "last": last}
+    except Exception:
+        return None
+
+
+def short_entry_price(sdk, acc, symbol, intent_px):
+    """放空進場限價：以「下單系統」價格帶為準。
+
+    intent_px＝策略觸發價（真實行情）。邏輯：
+      意圖價在帶內（正式環境常態）→ 用意圖價
+      意圖價帶外（沙箱：模擬價與真實行情脫鉤）→ 夾進帶內並 tick 對齊
+        （未對齊會被拒 4385621；帶外會被拒 4385715）
+    回傳 (price, note)；查價失敗回 (None, reason)。"""
+    band = order_band(sdk, acc, symbol)
+    if not band or not band["down"] or not band["up"]:
+        return None, "無法取得下單系統價格帶"
+    dn, up = band["down"], band["up"]
+    px = float(intent_px or 0)
+    inband = dn <= px <= up
+    if not inband:
+        px = min(max(px, dn), up)
+        px = round(math.floor(px / tick_size(px) + 1e-6)
+                   * tick_size(px), 2)   # tick 對齊（4385621；+1e-6 防浮點誤差）
+    return round(px, 2), ("意圖價帶內" if inband else
+                          f"帶外→夾帶 [{dn}~{up}] tick 對齊")
 
 
 def validate(rest, ticker, acc, symbol, odd, price):

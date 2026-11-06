@@ -608,15 +608,21 @@ class LiveEngine:
             from fubon_neo.constant import (BSAction, MarketType, PriceType,
                                             TimeInForce, OrderType)
             # 融券賣出：沙箱拒市價（4385034 停止融券賣出；預約單另有 4385862 禁市價）
-            # → 改「限價積極報價」（ref_px − 1 tick，向下取整至檔位），
-            #   實質等同市價立即成交，但符合沙箱限價規則。正式帳號同樣適用（更穩）。
+            # → 改「限價積極報價」。價格以「下單系統」價格帶為準（官方文件：
+            #   測試環境必用 query_symbol_quote；沙箱模擬價與真實行情脫鉤，
+            #   帶外限價會被拒 4385715）。正式環境意圖價恆在帶內 → 無副作用。
             px, is_mkt = None, True
             price_type = "Market"
             if side == "sell" and ot == "short" and ref_px:
-                tick = strategy.tick_size(float(ref_px))
-                px = round(math.floor(float(ref_px) / tick) * tick - tick, 2)
+                px, pnote = fo.short_entry_price(sdk, acc, sym, float(ref_px))
+                if px is None:
+                    self.log_event(sym, "ORDER_SKIP", f"放空限價取得失敗：{pnote}",
+                                   "E_NO_ORDER_BAND")
+                    self.state["last_error"] = f"{sym} 放空限價取得失敗"
+                    return
                 is_mkt = False
                 price_type = "Limit"
+                note = f"{note}（限價{px}｜{pnote}）"
             order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
                                    OrderType, sym, side, 1000, px, is_mkt, False,
                                    "ROD", ot, self.MY_ORDER_TAG)
@@ -640,8 +646,10 @@ class LiveEngine:
             conn = tdb.connect()
             try:
                 tdb.record_order(conn, mode="test", symbol=sym, side=side,
-                                 order_type=ot, quantity=1000, price="",
-                                 price_type="Market", market_type="Common", tif="ROD",
+                                 order_type=ot, quantity=1000,
+                                 price=str(px) if px is not None else "",
+                                 price_type=price_type, market_type="Common",
+                                 tif="ROD",
                                  user_def=self.MY_ORDER_TAG,
                                  order_no=str(no) if no else None,
                                  is_success=int(ok),
