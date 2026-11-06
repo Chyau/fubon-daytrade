@@ -101,15 +101,16 @@ def phase0(sdk, acc):
 
 
 def phase1(sdk, acc):
-    print("\n--- Phase 1：下單系統報價帶 vs 行情端（正式環境應一致）---")
-    consistent_n = fail_n = unverifiable = 0
+    print("\n--- Phase 1：下單系統價格帶 vs 行情端（正式環境應同一世界）---")
+    print("    檢查法：行情端 lastPrice 是否落在下單系統 [跌停, 漲停] 帶內")
+    print("    （沙箱：真實價在模擬帶外；正式：應在帶內）")
+    consistent_n = outside_n = unverifiable = 0
     for sym in ("2330", "0050", "2881", "2002"):
         band = fo.order_band(sdk, acc, sym)
         if not band:
             print(f"  {sym}：下單系統查詢失敗 ✗")
-            fail_n += 1
             continue
-        mkt_ref = 0
+        last = prev = 0
         err = ""
         try:
             md = fo.ensure_realtime(sdk)
@@ -118,24 +119,35 @@ def phase1(sdk, acc):
             else:
                 res = md.rest_client.stock.intraday.quote(symbol=sym)
                 d = fo.dig(res, "data") or {}
-                mkt_ref = float(fo.dig(d, "referencePrice") or 0)
-                if not mkt_ref:
-                    err = "行情端無 referencePrice 欄位"
+                last = float(fo.dig(d, "lastPrice") or fo.dig(d, "closePrice") or 0)
+                prev = float(fo.dig(d, "previousClose") or fo.dig(d, "referencePrice") or 0)
+                if not last:
+                    err = "行情端無 lastPrice/closePrice 欄位"
         except Exception as e:
             err = str(e)[:120]
-        if mkt_ref:
-            ok = (band["ref"] == mkt_ref)
-            consistent_n += ok
-            print(f"  {sym}：下單系統 {band['ref']}｜行情端 {mkt_ref} "
-                  f"{'✓ 一致' if ok else '⚠ 不一致'}")
+        if last:
+            inband = band["down"] <= last <= band["up"]
+            ref_ok = (not prev) or (prev == band["ref"])
+            if inband:
+                consistent_n += 1
+                extra = f"｜昨收比對 {'✓' if ref_ok else '⚠ 不等'}" if prev else ""
+                print(f"  {sym}：行情 last {last} ∈ 下單系統帶 "
+                      f"[{band['down']}, {band['up']}] ✓ 同一世界{extra}")
+            else:
+                outside_n += 1
+                print(f"  {sym}：行情 last {last} ⚠ 在下單系統帶 "
+                      f"[{band['down']}, {band['up']}] 之外 → 脫鉤（沙箱模式）！")
         else:
             unverifiable += 1
-            print(f"  {sym}：下單系統 {band['ref']}｜行情端未取得（{err or '無資料'}）→ 無法比對")
-    print(f"\n  統計：一致 {consistent_n}｜不一致 0（若有會逐條列）｜無法比對 {unverifiable}｜查詢失敗 {fail_n}")
-    if consistent_n:
-        print("✓ Phase 1：已驗證的標的參考價＝行情價（正式環境與沙箱脫鉤世界不同）")
-    if unverifiable:
-        print("⚠ 行情端未取得 — 若持續發生，引擎 source=fubon 的即時行情需要另外處理（見 Phase 1b）")
+            print(f"  {sym}：下單系統 ref {band['ref']}｜行情端未取得（{err or '無資料'}）")
+    print(f"\n  統計：同一世界 {consistent_n}｜脫鉤 {outside_n}｜無法比對 {unverifiable}")
+    if consistent_n and not outside_n:
+        print("✓ Phase 1 通過：正式環境行情與下單系統同一價格世界"
+              "（引擎觸發價恆在下單系統帶內，限價夾帶為 no-op）")
+    elif outside_n:
+        print("⚠ 發現脫鉤 — 引擎限價夾帶機制會自動防護，但需檢視")
+    else:
+        print("⚠ 全部無法比對 — 檢查行情端連線（Phase 1b 若通過則只是 quote 欄位差異）")
     PHASES_DONE.append(1)
 
 
