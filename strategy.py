@@ -227,6 +227,21 @@ def prev_chg_band(v):
     return "漲停(≥9%)"
 
 
+def t60_band(t60):
+    """60K 大方向分桶（逐字稿 2026-11 技術分析聖經：時間尺度分工 —
+    60K 看大方向、5K 找買賣點；同工具在趨勢/位置不同意義不同）
+    t60：live 引擎傳入的 60K 趨勢（"up"/"down"/None）"""
+    return {"up": "60K多頭", "down": "60K空頭"}.get(t60, "?")
+
+
+def vwap_pos(vwap, price):
+    """均價線相對位置（逐字稿：當沖核心工具 — 當日成交量加權均價線）
+    回傳 "均價上"/"均價下"/"?"。進場端即可判定 → 規則維度"""
+    if not vwap or not price:
+        return "?"
+    return "均價上" if float(price) >= float(vwap) else "均價下"
+
+
 def vol_ratio_band(v):
     """量能比分桶（進場當下即可判定 → 可作為避坑規則維度）
     統計發現：縮量長黑（<1 倍）假跌破率 88%；爆量（≥3 倍）僅 50%"""
@@ -474,6 +489,8 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                     "direction": direction,
                     "entry_mode": cfg.get("entry_mode", "next_open"),
                     "prev_day_chg": cfg.get("prev_day_chg"),
+                    "t60": cfg.get("t60"),
+                    "vwap_pos": cfg.get("vwap_pos"),
                     "entry_price": entry, "initial_stop": init_stop,
                     "risk_per_share": round(abs(entry - init_stop), 3),
                     "risk_budget": cfg["risk_budget"] or None, "lots": lots,
@@ -547,7 +564,9 @@ def run_day(day_bars, cfg, symbol, date_str, log=None, rules=None):
                        "pattern": feat.get("pattern", ""),
                        "entry_mode": cfg.get("entry_mode", "next_open"),
                        "t_direction": direction,
-                       "prev_chg_band": prev_chg_band(cfg.get("prev_day_chg"))}
+                       "prev_chg_band": prev_chg_band(cfg.get("prev_day_chg")),
+                       "t60_band": t60_band(cfg.get("t60")),
+                       "vwap_pos": cfg.get("vwap_pos") or "?"}
                 blk = blocked_by_rules(rules or [], ctx)
                 if blk:  # 學習迴路：核准的避坑規則擋下進場
                     signals.append({"date": date_str, "symbol": symbol,

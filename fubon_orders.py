@@ -411,6 +411,50 @@ def short_entry_price(sdk, acc, symbol, intent_px):
                           f"帶外→夾帶 [{dn}~{up}] tick 對齊")
 
 
+def trend_60k(sdk, symbol, n=5):
+    """60K 大方向（逐字稿：當沖用 60K 看方向、5K 找買賣點）。
+    判定：60K 最後收盤 vs 60K SMA(n)。回傳 {"trend","close","sma"} 或 None。
+    呼叫端自行快取（60K 變化慢，勿每 cycle 打 API）。"""
+    try:
+        md = ensure_realtime(sdk)
+        if md is None:
+            return None
+        from datetime import date as _d, timedelta as _td
+        frm = _d.today() - _td(days=30)
+        res = md.rest_client.stock.historical.candles(**{
+            "symbol": symbol, "from": frm.isoformat(),
+            "to": _d.today().isoformat(), "timeframe": "60", "sort": "asc",
+            "fields": "open,high,low,close,volume"})
+        bars = _parse_candle_rows(dig(res, "data") or dig(res, "raw") or [])
+        if len(bars) < n:
+            return None
+        closes = [b["close"] for b in bars]
+        sma = sum(closes[-n:]) / n
+        last = closes[-1]
+        return {"trend": "up" if last > sma else "down",
+                "close": last, "sma": round(sma, 2)}
+    except BaseException as e:
+        log.debug(f"trend_60k 失敗：{str(e)[:100]}")
+        return None
+
+
+def vwap_of_day(bars):
+    """當日均價線（VWAP）：優先取最後一根K的 average 欄位（後檯算好的
+    成交量加權均價）；缺值時以 5 分K 自算 Σ(典型價×量)/Σ量。"""
+    if not bars:
+        return None
+    avg = float(bars[-1].get("average", 0) or 0)
+    if avg > 0:
+        return avg
+    pv = vv = 0.0
+    for b in bars:
+        tp = (float(b["high"]) + float(b["low"]) + float(b["close"])) / 3
+        v = float(b.get("volume", 0) or 0)
+        pv += tp * v
+        vv += v
+    return round(pv / vv, 2) if vv > 0 else None
+
+
 def validate(rest, ticker, acc, symbol, odd, price):
     """漲跌停驗證（query_symbol_quote）+ 當沖資格（intraday.ticker.canDayTrade）"""
     from fubon_neo.constant import MarketType
@@ -762,7 +806,8 @@ def _parse_candle_rows(rows):
                          "high": round(float(r["high"]), 2),
                          "low": round(float(r["low"]), 2),
                          "close": round(float(r["close"]), 2),
-                         "volume": float(r.get("volume", 0) or 0)})
+                         "volume": float(r.get("volume", 0) or 0),
+                         "average": float(r.get("average", 0) or 0)})
         except (KeyError, TypeError, ValueError):
             continue
     return bars

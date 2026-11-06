@@ -331,13 +331,15 @@ class LiveEngine:
                 continue
             date = bars[0]["date"]
             pdc = self._prev_day_chg(sym)   # 前日漲幅%（快取；prev_chg_band 規則用）
+            t60 = self._t60(sym)            # 60K 大方向（快取 30 分）
+            vpos = self._vwap_pos(sym, bars, float(bars[-1]["close"]) if bars else None)
             if direction == "both":
                 # 多空雙向：兩套模擬都跑，取先觸發者（同根K不會同時長黑與長紅）
                 res_s = strategy.run_day(bars, {**cfg, "direction": "short",
-                                                "prev_day_chg": pdc},
+                                                "prev_day_chg": pdc, "t60": t60, "vwap_pos": vpos},
                                          sym, date, log=log, rules=rules)
                 res_l = strategy.run_day(bars, {**cfg, "direction": "long",
-                                                "prev_day_chg": pdc},
+                                                "prev_day_chg": pdc, "t60": t60, "vwap_pos": vpos},
                                          sym, date, log=log, rules=rules)
                 ts_, tl_ = res_s.get("trade"), res_l.get("trade")
                 if ts_ and tl_:
@@ -353,7 +355,7 @@ class LiveEngine:
                            + list(res_l.get("signals") or [])}
             else:
                 res = strategy.run_day(bars, {**cfg, "direction": direction,
-                                              "prev_day_chg": pdc},
+                                              "prev_day_chg": pdc, "t60": t60, "vwap_pos": vpos},
                                        sym, date, log=log, rules=rules)
             self._handle(sym, date, res, bars)
 
@@ -412,6 +414,36 @@ class LiveEngine:
             log.debug(f"大盤方向取得失敗：{e}")
         self.state["mkt_date"], self.state["mkt_dir"] = today, d
         return d
+
+    def _t60(self, sym):
+        """60K 大方向（"up"/"down"/None）— 每 (sym, 30分鐘) 算一次後快取
+        逐字稿（技術分析聖經）：時間尺度分工 — 60K 看大方向、5K 找買賣點"""
+        now = datetime.now()
+        slot = now.strftime("%Y%m%d%H") + ("a" if now.minute < 30 else "b")
+        cache = self.state.setdefault("t60_cache", {})
+        hit = cache.get(sym)
+        if hit and hit.get("slot") == slot:
+            return hit.get("trend")
+        trend = None
+        try:
+            import fubon_orders as fo
+            sdk0, _ = self._ensure_sdk()
+            r = fo.trend_60k(sdk=sdk0, symbol=sym)
+            trend = r.get("trend") if r else None
+        except BaseException as e:
+            log.debug(f"[live][{sym}] 60K 趨勢失敗：{str(e)[:80]}")
+        cache[sym] = {"slot": slot, "trend": trend}
+        return trend
+
+    def _vwap_pos(self, sym, bars, price):
+        """均價線相對位置（"均價上"/"均價下"/"?"）— bars 已含 average 欄"""
+        try:
+            import fubon_orders as fo
+            vwap = fo.vwap_of_day([b for b in (bars or [])
+                                   if b.get("date") == datetime.now().strftime("%Y-%m-%d")])
+            return strategy.vwap_pos(vwap, price)
+        except BaseException:
+            return "?"
 
     def _prev_day_chg(self, sym):
         """前日漲幅%（昨收 vs 前昨收）——每 (sym, 今日) 算一次後快取；失敗回 None

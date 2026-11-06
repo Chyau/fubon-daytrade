@@ -64,6 +64,8 @@ DIMS = {
     "t_direction": lambda t: _feat(t).get("direction") or "?",
     "prev_chg_band": lambda t: strategy.prev_chg_band(
         _feat(t).get("prev_day_chg")),
+    "t60_band": lambda t: strategy.t60_band(_feat(t).get("t60")),
+    "vwap_pos": lambda t: _feat(t).get("vwap_pos") or "?",
     "month": lambda t: (t["date"] or "")[5:7] + "月" or "?",
     "symbol": lambda t: t["symbol"],
     "exit_reason": lambda t: t["exit_reason"] or "?",
@@ -267,7 +269,7 @@ def mine_auto_rules(conn, min_n=10, gap=0.2):
     base = sum(1 for r in rows if (r["net_pnl"] or 0) <= 0) / len(rows)
     entry_dims = ("trigger_bucket", "weekday", "symbol", "body_pct_band",
                   "vol_ratio_band", "pattern", "entry_mode", "t_direction",
-                  "prev_chg_band")
+                  "prev_chg_band", "t60_band", "vwap_pos")
     rules = []
     for dim in entry_dims:
         fn = DIMS.get(dim)
