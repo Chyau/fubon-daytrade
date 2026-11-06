@@ -368,8 +368,13 @@ def order_band(sdk, acc, symbol):
     行情端 intraday.quote 與下單系統的模擬價脫鉤 — 2026-11-06 實測：
     2317 行情 227 vs 下單系統參考價 89.9）。
 
+    ⚠沙箱撮合也在「模擬世界」：2002 限價 21.2 賣出 → 成交價 23.55
+    （= 下單系統參考價；行情端同時刻只有 18.5）。即沙箱成交價≠真實行情，
+    沙箱只能驗「下單機制」（送單/回報/取消/錯誤路徑），不能驗價格與損益。
+    引擎的策略損益一律以真實行情模擬成交計算，與沙箱成交價無關。
+
     回傳 {"ref","up","down","last"} 或 None（查詢失敗）。
-    正式環境：ref=昨收、up/down=真實漲跌停 → 夾帶為無副作用。"""
+    正式環境：ref=昨收、up/down=真實漲跌停 → 夾帶為無副作用（待 preflight 驗證）。"""
     try:
         q = dig(sdk.stock.query_symbol_quote(acc, symbol), "data")
         raw = dig(q, "raw") or q
