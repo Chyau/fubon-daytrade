@@ -323,6 +323,65 @@ def phase4(sdk, acc, sym="2002"):
         PHASES_DONE.append(4)
 
 
+def phase5(sdk, acc, sym="0050"):
+    """零股 1 股買→市價賣（定期定額路徑驗證；約 100 元）。
+    ⚠盤中零股僅限限價單；同日買賣零股非當沖（正常現股交易）。"""
+    print(f"\n--- Phase 5：零股 1 股買賣（{sym}，約數百元內）---")
+    if not os.environ.get("PFRT_YES"):
+        print("✗ 需 --yes"); return
+    order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
+                           OrderType, sym, "buy", 1, None, True, True,
+                           "ROD", "stock", TAG)
+    try:
+        res = sdk.stock.place_order(acc, order)
+        ok = fo.dig(res, "is_success")
+        msg = fo.dig(res, "message")
+        no = fo.dig(fo.dig(res, "data"), "order_no")
+        print(f"  零股市價買 1 股：ok={ok}｜no={no}｜msg={msg!r}")
+        if not ok:
+            # 盤中零股可能僅限限價 → 退回限價（參考價+1tick）
+            band = fo.order_band(sdk, acc, sym)
+            if band and band.get("last"):
+                t = 0.05
+                lpx = round(float(band["last"]) + t, 2)
+                order = fo.build_order(Order, BSAction, MarketType, PriceType,
+                                       TimeInForce, OrderType, sym, "buy", 1,
+                                       lpx, False, True, "ROD", "stock", TAG)
+                res = sdk.stock.place_order(acc, order)
+                ok = fo.dig(res, "is_success")
+                no = fo.dig(fo.dig(res, "data"), "order_no")
+                print(f"  退回限價 {lpx}×1：ok={ok}｜msg={fo.dig(res, 'message')!r}")
+            if not ok:
+                print("✗ Phase 5 買進失敗"); return
+        time.sleep(3)
+        rows = fo.dig(sdk.stock.get_order_results(acc), "data") or []
+        mine = [r for r in fo.filter_my_orders(rows, user_def=TAG)]
+        filled = 0
+        for r in mine:
+            fo_no = fo.dig(r, "order_no")
+            if fo_no and str(fo_no) == str(fo.dig(fo.dig(res, 'data'), 'order_no') or no):
+                filled = int(fo.dig(r, "filled_qty") or 0)
+                print(f"  回報：status={fo.dig(r, 'status')}｜filled={filled}")
+        if filled < 1:
+            print("  未成交（限價未觸及）→ 取消（機制驗證已足）")
+            for r in mine:
+                if fo.dig(r, "status") in (0, 1, 10):
+                    sdk.stock.cancel_order(acc, r)
+            print("✓ Phase 5 通過（零股送單→回報→取消）")
+            PHASES_DONE.append(5)
+            return
+        print(f"  買進成交 {filled} 股 → 市價賣出平倉")
+        order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
+                               OrderType, sym, "sell", 1, None, True, True,
+                               "ROD", "stock", TAG)
+        res = sdk.stock.place_order(acc, order)
+        print(f"  賣出：ok={fo.dig(res, 'is_success')}｜msg={fo.dig(res, 'message')!r}")
+        print("✓ Phase 5 通過（零股買賣閉環）")
+        PHASES_DONE.append(5)
+    except BaseException as e:
+        print(f"✗ Phase 5 例外：{str(e)[:200]}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="正式帳號分級驗證（憑證不落盤）")
     ap.add_argument("--phase", type=int, default=None,
@@ -343,6 +402,8 @@ def main():
         phase3(sdk, acc, a.symbol or "2002")
     elif a.phase == 4:
         phase4(sdk, acc, a.symbol or "2002")
+    elif a.phase == 5:
+        phase5(sdk, acc, a.symbol or "0050")
     print(f"\n完成 Phase：{PHASES_DONE or '（僅唯讀）'}")
     if 2 not in PHASES_DONE:
         print("提醒：進實單前建議至少通過 Phase 2（遠價掛單+取消，零風險全鏈路）。")

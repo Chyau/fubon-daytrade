@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS ai_reviews(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT, date TEXT, kind TEXT, content TEXT
 );
+CREATE TABLE IF NOT EXISTS positions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  open_date TEXT, symbol TEXT, strategy TEXT,
+  qty INTEGER, buy_price REAL, stop REAL,
+  max_hold_days INTEGER DEFAULT 3,
+  status TEXT DEFAULT 'open',
+  close_date TEXT, close_price REAL, pnl REAL,
+  note TEXT, created_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(date);
 CREATE INDEX IF NOT EXISTS idx_events_trade ON trade_events(trade_id);

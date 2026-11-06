@@ -127,6 +127,7 @@ BASE = """<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8">
   <a href="{{ url_for('orders_page') }}">🧾 下單紀錄</a>
   <a href="{{ url_for('backtest_page') }}">⏱ 回測</a>
   <a href="{{ url_for('account_page') }}">💼 帳務</a>
+  <a href="{{ url_for('swing_page') }}">📈 波段/定投</a>
   <a href="{{ url_for('ai_page') }}">🤖 AI 助手</a>
   <a href="{{ url_for('help_page') }}">📖 手冊</a>
 </div><div class="wrap">{{ content|safe }}</div>
@@ -1288,6 +1289,129 @@ def api_ai_review():
         return {"error": lerr or "無回應"}
     ai_review.save_review(d["date"], "daily", text)
     return {"date": d["date"], "content": text}
+
+
+# ==================== 波段引擎（漲停次日/訊號波段/定投） ====================
+
+import swing as swing_mod   # noqa: E402
+import positions as pos_mod  # noqa: E402
+
+
+@app.route("/swing")
+def swing_page():
+    st = {k: v for k, v in swing_mod.engine.state.items() if not k.startswith("_")}
+    open_pos = pos_mod.list_open()
+    closed = []
+    conn = tdb.connect()
+    conn.row_factory = tdb.sqlite3.Row
+    try:
+        closed = [dict(r) for r in conn.execute(
+            "SELECT * FROM positions WHERE status='closed' "
+            "ORDER BY id DESC LIMIT 15").fetchall()]
+    finally:
+        conn.close()
+    return page(SWING_TPL, st=st, open_pos=open_pos, closed=closed,
+                enabled=llm.enabled())
+
+
+SWING_TPL = """
+<h1>📈 波段／定投引擎
+  <span class="bdg {{ 'g' if st.running else 'o' }}">{{ '執行中' if st.running else '停止' }}</span>
+  <span class="bdg b">{{ st.mode }}</span></h1>
+<div class="card">
+  <h3>⚙ 引擎控制（跨日持倉；與當沖引擎並行）</h3>
+  <form method="post" action="/swing/start">
+    <label>模式 <select name="mode">
+      <option value="dry">dry 模擬（只記錄不送單）</option>
+      <option value="real">真實下單（需 PLACE_ORDER=true）</option></select></label>
+    <label>標的（留空=做多清單） <input name="symbols" placeholder="2002,2881,…"
+      style="width:220px"></label>
+    <label>最長持有 <input name="max_hold_days" type="number" value="3" min="1"
+      max="10" style="width:60px"> 日</label><br>
+    <label><input type="checkbox" name="lu_enabled" checked> 漲停次日跟單
+      （昨漲停→跳空≤1%→買進1張，停損跌回漲停價）</label><br>
+    <label><input type="checkbox" name="sig_enabled"> 訊號波段版
+      （長紅K→買進1張，停損觸發K低點）</label><br>
+    <label><input type="checkbox" name="dca_enabled"> 定期定額
+      標的 <input name="dca_symbols" placeholder="0050,0056" style="width:150px">
+      每週 <select name="dca_weekday">
+        <option value="0">一</option><option value="1">二</option>
+        <option value="2">三</option><option value="3">四</option>
+        <option value="4">五</option></select>
+      金額 <input name="dca_amount" type="number" value="3000" style="width:80px"> 元
+      時間 <input name="dca_time" value="10:00" style="width:70px"></label><br>
+    <button type="submit">啟動</button>
+  </form>
+  <form method="post" action="/swing/stop" style="margin-top:6px">
+    <button type="submit">停止引擎</button>
+    <span style="color:#94a3b8">循環 {{ st.cycles }}｜{{ st.last_error or '錯誤：無' }}</span>
+  </form>
+</div>
+<div class="card">
+  <h3>📦 未平倉持倉（結構停損管理）</h3>
+  <table><tr><th>#</th><th>開倉日</th><th>標的</th><th>策略</th><th>股數</th>
+  <th>買進價</th><th>停損</th><th>持有日</th><th>備註</th></tr>
+  {% for p in open_pos %}<tr><td>{{ p.id }}</td><td>{{ p.open_date }}</td>
+  <td>{{ p.symbol }}</td><td>{{ p.strategy }}</td><td>{{ p.qty }}</td>
+  <td>{{ p.buy_price }}</td><td>{{ p.stop or '—' }}</td>
+  <td>{{ p.max_hold_days }}</td><td>{{ p.note }}</td></tr>
+  {% else %}<tr><td colspan="9">（無未平倉）</td></tr>{% endfor %}</table>
+</div>
+<div class="card">
+  <h3>📜 最近平倉</h3>
+  <table><tr><th>#</th><th>標的</th><th>策略</th><th>買進</th><th>出場</th>
+  <th>損益</th><th>備註</th></tr>
+  {% for p in closed %}<tr><td>{{ p.id }}</td><td>{{ p.symbol }}</td>
+  <td>{{ p.strategy }}</td><td>{{ p.buy_price }}</td><td>{{ p.close_price }}</td>
+  <td style="color:{{ '#22c55e' if (p.pnl or 0) >= 0 else '#ef4444' }}">
+    {{ '{:+,.0f}'.format(p.pnl or 0) }}</td><td>{{ p.note }}</td></tr>
+  {% else %}<tr><td colspan="7">（無紀錄）</td></tr>{% endfor %}</table>
+</div>
+<div class="card">
+  <h3>🧭 事件流（最新 30）</h3>
+  <table><tr><th>時間</th><th>標的</th><th>事件</th><th>詳情</th></tr>
+  {% for e in st.events[:30] %}<tr><td>{{ e.time }}</td><td>{{ e.symbol }}</td>
+  <td>{{ e.kind }}</td><td>{{ e.detail }}</td></tr>
+  {% else %}<tr><td colspan="4">（無事件）</td></tr>{% endfor %}</table>
+</div>
+"""
+
+
+@app.route("/swing/start", methods=["POST"])
+def swing_start():
+    symbols = [s.strip() for s in
+               (request.form.get("symbols") or "").replace("，", ",").split(",")
+               if s.strip()]
+    if not symbols:
+        # 留空 → 用做多清單（波段只做多）
+        try:
+            from longshort import long_symbols
+            _, syms = long_symbols()
+            symbols = syms[:20]
+        except Exception:
+            symbols = []
+    dca_syms = [s.strip() for s in
+                (request.form.get("dca_symbols") or "").replace("，", ",").split(",")
+                if s.strip()]
+    msg = swing_mod.engine.start(
+        symbols, mode=request.form.get("mode", "dry"),
+        lu_enabled=bool(request.form.get("lu_enabled")),
+        sig_enabled=bool(request.form.get("sig_enabled")),
+        max_hold_days=request.form.get("max_hold_days", 3),
+        dca_enabled=bool(request.form.get("dca_enabled")),
+        dca_symbols=dca_syms,
+        dca_amount=request.form.get("dca_amount", 3000),
+        dca_weekday=request.form.get("dca_weekday", 0),
+        dca_time=request.form.get("dca_time", "10:00"))
+    log.info(f"網頁啟動波段引擎：{msg}")
+    return redirect(url_for("swing_page"))
+
+
+@app.route("/swing/stop", methods=["POST"])
+def swing_stop():
+    msg = swing_mod.engine.stop()
+    log.info(f"網頁停止波段引擎：{msg}")
+    return redirect(url_for("swing_page"))
 
 
 @app.route("/help")
