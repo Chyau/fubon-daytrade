@@ -31,6 +31,8 @@ import strategy             # noqa: E402
 import backtest as bt       # noqa: E402
 import chips as chips_mod   # noqa: E402
 import live as live_mod     # noqa: E402
+import llm                  # noqa: E402
+import ai_review            # noqa: E402
 from journal import DIMS    # noqa: E402
 
 log = get_logger("web")
@@ -124,6 +126,8 @@ BASE = """<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8">
   <a href="{{ url_for('chips_page') }}">🧲 籌碼選股</a>
   <a href="{{ url_for('orders_page') }}">🧾 下單紀錄</a>
   <a href="{{ url_for('backtest_page') }}">⏱ 回測</a>
+  <a href="{{ url_for('account_page') }}">💼 帳務</a>
+  <a href="{{ url_for('ai_page') }}">🤖 AI 助手</a>
   <a href="{{ url_for('help_page') }}">📖 手冊</a>
 </div><div class="wrap">{{ content|safe }}</div>
 <script>
@@ -1068,6 +1072,222 @@ def api_stats():
 def api_trades():
     return {"trades": q("SELECT * FROM trades ORDER BY id DESC LIMIT ?",
                         (int(request.args.get("limit", 50)),))}
+
+
+# ==================== 帳務（庫存/損益/餘額/手動下單） ====================
+
+def _sdk_for_account():
+    """帳務頁用 SDK（session 快取；失敗回 None 由頁面顯示錯誤）"""
+    try:
+        import fubon_orders as fo
+        return fo.connect_sdk(fo.fubon_cfg())
+    except Exception as e:
+        log.warning(f"帳務頁 SDK 連線失敗：{e}")
+        return None, None
+
+
+@app.route("/account")
+def account_page():
+    import accounting as acct
+    import fubon_orders as fo
+    sdk, acc = _sdk_for_account()
+    if sdk is None:
+        return page("<h1>💼 帳務</h1><div class='card'>SDK 連線失敗 — "
+                    "檢查 .env 憑證設定（見 /help）。</div>")
+    cfg = fo.fubon_cfg()
+    bank = acct.bank_remain(sdk, acc)
+    inv = acct.inventories_with_buyinfo(sdk, acc)
+    unrl = {u["symbol"]: u for u in acct.unrealized(sdk, acc)}
+    rl = acct.realized(sdk, acc)
+    env_badge = "🧪 測試沙箱" if cfg["use_test"] else "💰 正式環境"
+    po = os.environ.get("PLACE_ORDER", "false").strip().lower()
+    placeable = po in ("true", "1", "yes")
+    rows = [{**it,
+             "unrl_net": (unrl.get(it["symbol"]) or {}).get("net")}
+            for it in inv]
+    tot_unrl = sum(u.get("net", 0) for u in unrl.values())
+    return page(ACCT_TPL, env_badge=env_badge, placeable=placeable, bank=bank,
+                rows=rows, tot_unrl=tot_unrl, rl=rl, use_test=cfg["use_test"])
+
+
+ACCT_TPL = """
+<h1>💼 帳務總覽 <span class="bdg b">{{ env_badge }}</span>
+  <span class="bdg {{ 'g' if placeable else 'o' }}">PLACE_ORDER {{ '開' if placeable else '關（dry）' }}</span></h1>
+<div class="card">
+  <h3>🏦 銀行餘額</h3>
+  <p style="font-size:22px;font-weight:700">
+    {{ '{:,.0f}'.format(bank.balance) if bank else '查詢失敗' }}
+    <small style="color:#94a3b8">{{ bank.currency if bank else '' }}</small></p>
+</div>
+<div class="card">
+  <h3>📦 庫存｜合計未實現
+    <span style="color:{{ '#22c55e' if tot_unrl >= 0 else '#ef4444' }}">{{ '{:+,.0f}'.format(tot_unrl) }}</span></h3>
+  <table><tr><th>標的</th><th>買進日期</th><th>買進價</th><th>整股</th><th>零股</th>
+  <th>可賣</th><th>未實現損益</th></tr>
+  {% for r in rows %}<tr><td>{{ r.symbol }}</td><td>{{ r.last_buy_date or '—' }}</td>
+  <td>{{ r.last_buy_price or r.buy_avg or '—' }}</td><td>{{ r.qty_whole }}</td>
+  <td>{{ r.qty_odd }}</td><td>{{ r.tradable }}</td>
+  <td style="color:{{ '#22c55e' if (r.unrl_net or 0) >= 0 else '#ef4444' }}">
+    {{ '{:+,.0f}'.format(r.unrl_net) if r.unrl_net is not none else '—' }}</td></tr>
+  {% else %}<tr><td colspan="7">（無庫存）</td></tr>{% endfor %}</table>
+</div>
+<div class="card">
+  <h3>💰 已實現損益｜獲利 {{ '{:+,.0f}'.format(rl.summary.profit) }}｜
+    虧損 {{ '{:+,.0f}'.format(-rl.summary.loss) }}｜淨
+    <span style="color:{{ '#22c55e' if rl.summary.net >= 0 else '#ef4444' }}">
+    {{ '{:+,.0f}'.format(rl.summary.net) }}</span></h3>
+  <table><tr><th>日期</th><th>標的</th><th>方向</th><th>股數</th><th>價格</th><th>淨損益</th></tr>
+  {% for r in rl.rows[:20] %}<tr><td>{{ r.date }}</td><td>{{ r.symbol }}</td>
+  <td>{{ r.buy_sell }}</td><td>{{ r.qty }}</td><td>{{ r.price }}</td>
+  <td style="color:{{ '#22c55e' if r.net >= 0 else '#ef4444' }}">{{ '{:+,.0f}'.format(r.net) }}</td></tr>
+  {% else %}<tr><td colspan="6">（無紀錄）</td></tr>{% endfor %}</table>
+</div>
+<div class="card">
+  <h3>🖊 手動下單（現股整張／盤中零股）</h3>
+  <form id="mof" onsubmit="return sendOrder(event)">
+    <label>標的 <input name="symbol" placeholder="0050" required style="width:90px"></label>
+    <label>方向 <select name="side"><option value="buy">買進</option>
+      <option value="sell">賣出</option></select></label>
+    <label>數量(股) <input name="qty" type="number" min="1" placeholder="1000" required
+      style="width:90px"></label>
+    <label>型態 <select name="odd"><option value="0">現股整張（1000 倍數）</option>
+      <option value="1">盤中零股（1~999 股）</option></select></label>
+    <label>價格 <input name="price" type="number" step="0.01" placeholder="留空=市價"
+      style="width:110px"></label>
+    <label><input type="checkbox" name="real"> 真實送單（不勾=dry）</label>
+    <button type="submit">送出</button>
+    <span id="moresult" style="margin-left:10px"></span>
+  </form>
+  <p style="color:#94a3b8;font-size:12px">
+    ⚠ 真實送單需 PLACE_ORDER=true｜買進日期＝帳戶最近買進成交（沙箱共用帳號可能含他人紀錄）</p>
+</div>
+<script>
+async function sendOrder(ev){
+  ev.preventDefault();
+  var f = ev.target, out = document.getElementById('moresult');
+  out.textContent = '送單中…';
+  try{
+    var r = await fetch('/api/manual/order', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbol:f.symbol.value, side:f.side.value,
+        qty:parseInt(f.qty.value), odd:f.odd.value==='1',
+        price:f.price.value||null, real:f.real.checked})});
+    var j = await r.json();
+    out.textContent = (j.ok ? '✓ ' : '✗ ') + j.message;
+    if (j.ok && f.real.checked) setTimeout(function(){location.reload();}, 1500);
+  }catch(e){ out.textContent = '✗ ' + e; }
+  return false;
+}
+</script>
+"""
+
+
+@app.route("/api/account")
+def api_account():
+    import accounting as acct
+    sdk, acc = _sdk_for_account()
+    if sdk is None:
+        return {"error": "SDK 連線失敗"}, 503
+    return {"bank": acct.bank_remain(sdk, acc),
+            "inventories": acct.inventories_with_buyinfo(sdk, acc),
+            "unrealized": acct.unrealized(sdk, acc),
+            "realized": acct.realized(sdk, acc)}
+
+
+@app.route("/api/manual/order", methods=["POST"])
+def api_manual_order():
+    import accounting as acct
+    d = request.get_json(silent=True) or {}
+    sdk, acc = _sdk_for_account()
+    if sdk is None:
+        return {"ok": False, "message": "SDK 連線失敗"}
+    return acct.place_manual(
+        sdk, acc, d.get("symbol"), d.get("side"), d.get("qty"),
+        price=d.get("price"), odd=bool(d.get("odd")),
+        dry=not bool(d.get("real")))
+
+
+# ==================== AI 助手 ====================
+
+AI_TPL = """
+<h1>🤖 AI 助手 {% if not enabled %}<span class="bdg o">LLM 未設定</span>
+{% else %}<span class="bdg g">已啟用</span>{% endif %}</h1>
+{% if not enabled %}
+<div class="card">⚠ LLM 未設定：.env 需填 <b>LLM_BASE_URL / LLM_API_KEY / LLM_MODEL</b>
+（OpenAI 相容端點，agnes-ai / Gemini / 任何 /v1 服務皆可）。填完重啟 app。</div>
+{% endif %}
+<div class="card">
+  <h3>💬 問系統（基於最新交易日數據）</h3>
+  <div id="chat" style="max-height:420px;overflow:auto;font-size:14px"></div>
+  <form onsubmit="return askAI(event)" style="display:flex;gap:8px;margin-top:8px">
+    <input id="q" placeholder="例：今天為什麼被擋單？我最虧的時段？" style="flex:1" required>
+    <button type="submit">送出</button>
+  </form>
+</div>
+<div class="card">
+  <h3>📋 最新 AI 複盤</h3>
+  {% if review %}
+    <p style="color:#94a3b8">{{ review.created_at }}（{{ review.date }}）</p>
+    <pre style="white-space:pre-wrap">{{ review.content }}</pre>
+  {% else %}<p>（尚無複盤 — 執行 python ai_review.py 生成）</p>{% endif %}
+</div>
+<script>
+async function askAI(ev){
+  ev.preventDefault();
+  var q = document.getElementById('q'), box = document.getElementById('chat');
+  box.innerHTML += '<p><b>你：</b>' + q.value + '</p><p><i>思考中…</i></p>';
+  var r = await fetch('/api/ai/chat', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({question: q.value})});
+  var j = await r.json();
+  box.innerHTML = box.innerHTML.replace('<p><i>思考中…</i></p>', '') +
+    '<p style="color:#60a5fa"><b>AI：</b>' +
+    (j.answer || j.error || '（無回應）').replace(/\\n/g,'<br>') + '</p>';
+  q.value = '';
+  box.scrollTop = box.scrollHeight;
+  return false;
+}
+</script>
+"""
+
+
+@app.route("/ai")
+def ai_page():
+    review = ai_review.latest_review()
+    return page(AI_TPL, review=review, enabled=llm.enabled())
+
+
+@app.route("/api/ai/chat", methods=["POST"])
+def api_ai_chat():
+    if not llm.enabled():
+        return {"error": "LLM 未設定（.env：LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）"}
+    q = (request.get_json(silent=True) or {}).get("question", "").strip()
+    if not q:
+        return {"error": "問題不可空"}
+    d, err = ai_review.collect()
+    digest = d if not err else {"note": err}
+    rev = ai_review.latest_review()
+    system = ("你是台股當沖系統的 AI 助手。只能依據下方系統數據回答；"
+              "數據沒有的就明說不知道。繁體中文，簡潔（≤200字）。")
+    user = (f"【系統數據】\n{json.dumps(digest, ensure_ascii=False, default=str)[:6000]}\n"
+            f"【最新複盤】{(rev or {}).get('content', '')[:800]}\n【問題】{q}")
+    text, lerr = llm.chat([{"role": "system", "content": system},
+                           {"role": "user", "content": user}], max_tokens=600)
+    return {"answer": text} if text else {"error": lerr or "無回應"}
+
+
+@app.route("/api/ai/review", methods=["POST"])
+def api_ai_review():
+    if not llm.enabled():
+        return {"error": "LLM 未設定"}
+    d, err = ai_review.collect()
+    if err:
+        return {"error": err}
+    text, lerr = llm.chat(ai_review.build_messages(d))
+    if not text:
+        return {"error": lerr or "無回應"}
+    ai_review.save_review(d["date"], "daily", text)
+    return {"date": d["date"], "content": text}
 
 
 @app.route("/help")

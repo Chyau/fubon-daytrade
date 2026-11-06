@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS rules(
   action TEXT DEFAULT 'skip_entry', source TEXT DEFAULT 'manual',
   approved INTEGER DEFAULT 0, note TEXT
 );
+CREATE TABLE IF NOT EXISTS ai_reviews(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT, date TEXT, kind TEXT, content TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(date);
 CREATE INDEX IF NOT EXISTS idx_events_trade ON trade_events(trade_id);
