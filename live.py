@@ -246,6 +246,24 @@ class LiveEngine:
                                    f"({pnl_pct:+.2f}%, {why})",
                                    f"E_OF_PAPER_{'WIN' if pnl_pct > 0 else 'LOSE'}")
                     log.info(f"[內外盤紙上][{sym}] 平倉 {pnl_pct:+.2f}%（{why}）")
+                    # 持久化（學習證據）：虛擬帳戶績效入 signals_log，
+                    # 重啟不清除 → 樣本累積後由 tools/of_paper_stats.py 評估升級實單
+                    try:
+                        conn = tdb.connect()
+                        try:
+                            tdb.record_signal(
+                                conn, datetime.now().strftime("%Y-%m-%d"), sym,
+                                f"{datetime.now().strftime('%Y-%m-%d')} {now_s}",
+                                "OF_PAPER_CLOSE",
+                                f"E_OF_PAPER_{'WIN' if pnl_pct > 0 else 'LOSE'}",
+                                json.dumps({"kind": open_pt["kind"], "dir": d,
+                                            "entry": open_pt["entry"], "exit": px,
+                                            "pnl_pct": pnl_pct, "why": why},
+                                           ensure_ascii=False))
+                        finally:
+                            conn.close()
+                    except Exception as _e:
+                        log.debug(f"[內外盤紙上][{sym}] 平倉入庫失敗：{_e}")
             # ---- A-2 狀態機：訊號「轉變」才觸發（開虛擬倉＋記錄一次）----
             if sig:
                 if self._of_last.get(sym) != sig["kind"]:
@@ -266,6 +284,22 @@ class LiveEngine:
                         self.log_event(sym, "OF_PAPER_OPEN",
                                        f"{sig['kind']} {'long' if is_long else 'short'} "
                                        f"@ {px}", f"E_OF_{sig['kind']}")
+                        # 持久化：開倉記錄（重啟後未平倉者可由統計工具標記棄單）
+                        try:
+                            conn = tdb.connect()
+                            try:
+                                tdb.record_signal(
+                                    conn, datetime.now().strftime("%Y-%m-%d"), sym,
+                                    f"{datetime.now().strftime('%Y-%m-%d')} {now_s}",
+                                    "OF_PAPER_OPEN", f"E_OF_{sig['kind']}",
+                                    json.dumps({"kind": sig["kind"],
+                                                "dir": "long" if is_long else "short",
+                                                "entry": px},
+                                               ensure_ascii=False))
+                            finally:
+                                conn.close()
+                        except Exception as _e:
+                            log.debug(f"[內外盤紙上][{sym}] 開倉入庫失敗：{_e}")
         except Exception as e:
             log.warning(f"內外盤觀察失敗（{sym}）：{str(e)[:120]}")
 
@@ -296,11 +330,14 @@ class LiveEngine:
             if not bars:
                 continue
             date = bars[0]["date"]
+            pdc = self._prev_day_chg(sym)   # 前日漲幅%（快取；prev_chg_band 規則用）
             if direction == "both":
                 # 多空雙向：兩套模擬都跑，取先觸發者（同根K不會同時長黑與長紅）
-                res_s = strategy.run_day(bars, {**cfg, "direction": "short"},
+                res_s = strategy.run_day(bars, {**cfg, "direction": "short",
+                                                "prev_day_chg": pdc},
                                          sym, date, log=log, rules=rules)
-                res_l = strategy.run_day(bars, {**cfg, "direction": "long"},
+                res_l = strategy.run_day(bars, {**cfg, "direction": "long",
+                                                "prev_day_chg": pdc},
                                          sym, date, log=log, rules=rules)
                 ts_, tl_ = res_s.get("trade"), res_l.get("trade")
                 if ts_ and tl_:
@@ -315,7 +352,8 @@ class LiveEngine:
                            "signals": list(res_s.get("signals") or [])
                            + list(res_l.get("signals") or [])}
             else:
-                res = strategy.run_day(bars, {**cfg, "direction": direction},
+                res = strategy.run_day(bars, {**cfg, "direction": direction,
+                                              "prev_day_chg": pdc},
                                        sym, date, log=log, rules=rules)
             self._handle(sym, date, res, bars)
 
@@ -443,7 +481,8 @@ class LiveEngine:
                     elif _t_dir == "long":
                         self._order(sym, "buy", "stock", "進場買進", date=date)
                     else:
-                        self._order(sym, "sell", "short", "進場放空", date=date)
+                        self._order(sym, "sell", "short", "進場放空", date=date,
+                                    ref_px=t.get("entry_price"))
                     # 進階保護：同步下「停損買回條件單」（環境變數開關，預設關）
                     if os.environ.get("LIVE_AUTO_CONDITION") == "1":
                         try:
@@ -522,7 +561,7 @@ class LiveEngine:
                 raise RuntimeError(str(e))
         return self.state["sdk"], self.state["acc"]
 
-    def _order(self, sym, side, ot, note, date=None):
+    def _order(self, sym, side, ot, note, date=None, ref_px=None):
         try:
             sdk, acc = self._ensure_sdk()
             # 當沖/融券資格預檢（僅進場單；出場一律放行；FUBON_GATE=0 可關閉）
@@ -568,8 +607,18 @@ class LiveEngine:
             from fubon_neo.sdk import Order
             from fubon_neo.constant import (BSAction, MarketType, PriceType,
                                             TimeInForce, OrderType)
+            # 融券賣出：沙箱拒市價（4385034 停止融券賣出；預約單另有 4385862 禁市價）
+            # → 改「限價積極報價」（ref_px − 1 tick，向下取整至檔位），
+            #   實質等同市價立即成交，但符合沙箱限價規則。正式帳號同樣適用（更穩）。
+            px, is_mkt = None, True
+            price_type = "Market"
+            if side == "sell" and ot == "short" and ref_px:
+                tick = strategy.tick_size(float(ref_px))
+                px = round(math.floor(float(ref_px) / tick) * tick - tick, 2)
+                is_mkt = False
+                price_type = "Limit"
             order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
-                                   OrderType, sym, side, 1000, None, True, False,
+                                   OrderType, sym, side, 1000, px, is_mkt, False,
                                    "ROD", ot, self.MY_ORDER_TAG)
             res = sdk.stock.place_order(acc, order)
             data = fo.dig(res, "data")
