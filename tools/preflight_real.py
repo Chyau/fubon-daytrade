@@ -13,7 +13,8 @@
             引擎 live 模式 source=fubon 依賴此，正式環境必須可用）
   Phase 2   遠價掛單＋取消：漲停價買進掛單（永不成交）
             → 確認回報 → 取消 → 確認狀態                 （零成交風險）
-  Phase 3   盤中零股 1 股買進→立即市價賣出（約數百元內）   （低風險，需 --yes）
+  Phase 3   現股當沖整張來回（先買後賣；當沖限整張，零股不可當沖）
+            市價買進 1 張 → 市價賣出平倉                  （真實成交，需 --yes）
   Phase 4   融券限價賣出→市價買回（引擎同路徑，需信用戶）   （真實部位數秒，需 --yes）
 
 ⚠ Phase 2+ 每階段都需顯式指定；Phase 3/4 需再加 --yes。
@@ -21,7 +22,7 @@
 用法（在專案目錄執行）：
   python tools/preflight_real.py                  # Phase 0+1+1b（唯讀）
   python tools/preflight_real.py --phase 2        # 遠價掛單＋取消
-  python tools/preflight_real.py --phase 3 --yes  # 零股小額實單
+  python tools/preflight_real.py --phase 3 --yes  # 整張現股當沖來回
   python tools/preflight_real.py --phase 4 --yes  # 融券來回（需信用戶）
 """
 import argparse
@@ -210,38 +211,65 @@ def phase2(sdk, acc, sym="0050"):
     PHASES_DONE.append(2)
 
 
-def phase3(sdk, acc, sym="0050"):
-    print(f"\n--- Phase 3：盤中零股 1 股買進→市價賣出（{sym}，約數百元內）---")
-    band = fo.order_band(sdk, acc, sym)
-    if not band:
-        print("✗ 查不到價格帶"); return
-    px = min(band["up"], round(band["ref"] * 1.005, 2))
+def phase3(sdk, acc, sym="2002"):
+    """現股當沖整張來回（先買後賣）— 符合引擎實際行為（當沖限整張，零股不可當沖）。
+    標的預設 2002（約 19 元 → 1 張 ≈ 19,000 元，來回成本約 50~100 元）。
+    ① 查當沖資格 bitmask（daytrade_and_stock_info；bit4=可先買後賣）
+    ② 市價買進 1 張 → 確認成交
+    ③ 市價賣出 1 張平倉 → 確認成交"""
+    print(f"\n--- Phase 3：現股當沖整張來回（{sym}，先買後賣）---")
+    if not os.environ.get("PFRT_YES"):
+        print("✗ 需 --yes"); return
+    # ① 當沖資格（bit4 = 可先買後賣）
+    try:
+        info = fo.daytrade_info(sdk, acc, sym)
+        st = info.get("status")
+        can_buy_first = bool(st and (int(st) & 4))
+        print(f"  當沖資格 status={st}｜先買後賣 {'✓' if can_buy_first else '✗'}"
+              f"｜現股額度 {info.get('quota')}")
+        if not can_buy_first:
+            print("✗ 此標的不支援先買後賣當沖 → 同日賣出可能被拒，中止（換 --symbol）")
+            return
+    except Exception as e:
+        print(f"⚠ 當沖資格查詢失敗：{str(e)[:100]}（繼續，但同日賣出有風險）")
+    # ② 市價買進 1 張
     order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
-                           OrderType, sym, "buy", 1, px, False, True,
+                           OrderType, sym, "buy", 1000, None, True, False,
                            "ROD", "stock", TAG)
     res = sdk.stock.place_order(acc, order)
-    ok = fo.dig(res, "is_success")
     no = fo.dig(fo.dig(res, "data"), "order_no")
-    print(f"  零股買進限價 {px}×1：ok={ok}｜no={no}｜msg={fo.dig(res, 'message')!r}")
-    if not ok or not no:
-        print("✗ Phase 3 買進失敗"); return
+    print(f"  市價買進 1 張：ok={fo.dig(res, 'is_success')}｜no={no}｜"
+          f"msg={fo.dig(res, 'message')!r}")
+    if not fo.dig(res, "is_success") or not no:
+        print("✗ 買進失敗"); return
     time.sleep(3)
     rows = fo.dig(sdk.stock.get_order_results(acc), "data") or []
-    mine = [r for r in fo.filter_my_orders(rows, user_def=TAG)
-            if str(fo.dig(r, "order_no")) == str(no)]
-    filled = float(fo.dig(mine[0], "filled_qty") or 0) if mine else 0
-    if filled < 1:
-        print("  未成交 → 取消（機制驗證已足，價格未觸及）")
-        if mine:
-            sdk.stock.cancel_order(acc, mine[0])
+    filled = 0
+    for r in fo.filter_my_orders(rows, user_def=TAG):
+        if str(fo.dig(r, "order_no")) == str(no):
+            filled = int(fo.dig(r, "filled_qty") or 0)
+            print(f"  回報：status={fo.dig(r, 'status')}｜filled={filled}")
+    if filled < 1000:
+        print("  未滿 1 張 → 若未成交則取消")
+        for r in fo.filter_my_orders(rows, user_def=TAG):
+            if str(fo.dig(r, "order_no")) == str(no) and \
+                    fo.dig(r, "status") in (0, 1, 10):
+                sdk.stock.cancel_order(acc, r)
         return
-    print(f"  買進成交 {filled:.0f} 股 → 市價賣出平倉")
+    # ③ 市價賣出平倉
     order = fo.build_order(Order, BSAction, MarketType, PriceType, TimeInForce,
-                           OrderType, sym, "sell", 1, None, True, True,
+                           OrderType, sym, "sell", 1000, None, True, False,
                            "ROD", "stock", TAG)
     res = sdk.stock.place_order(acc, order)
-    print(f"  賣出：ok={fo.dig(res, 'is_success')}｜msg={fo.dig(res, 'message')!r}")
-    print("✓ Phase 3 通過（零股買賣閉環）")
+    no2 = fo.dig(fo.dig(res, "data"), "order_no")
+    print(f"  市價賣出平倉：ok={fo.dig(res, 'is_success')}｜no={no2}｜"
+          f"msg={fo.dig(res, 'message')!r}")
+    time.sleep(3)
+    rows = fo.dig(sdk.stock.get_order_results(acc), "data") or []
+    for r in fo.filter_my_orders(rows, user_def=TAG):
+        if str(fo.dig(r, "order_no")) == str(no2):
+            print(f"  賣出回報：status={fo.dig(r, 'status')}｜filled={fo.dig(r, 'filled_qty')}")
+    print("✓ Phase 3 通過（整張現股當沖來回閉環）")
     PHASES_DONE.append(3)
 
 
@@ -312,7 +340,7 @@ def main():
     if a.phase == 2:
         phase2(sdk, acc, a.symbol or "0050")
     elif a.phase == 3:
-        phase3(sdk, acc, a.symbol or "0050")
+        phase3(sdk, acc, a.symbol or "2002")
     elif a.phase == 4:
         phase4(sdk, acc, a.symbol or "2002")
     print(f"\n完成 Phase：{PHASES_DONE or '（僅唯讀）'}")
