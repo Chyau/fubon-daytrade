@@ -27,12 +27,6 @@ from logutil import get_logger, ensure_utf8_stdout
 
 ensure_utf8_stdout()
 log = get_logger("ai_holdings")
-# ⚠ WIP 已知待修（2026-11-07 暫停點，下午續作）：
-#   ① execute() 的庫存以 symbol 為 key 會被融券/SBL 列蓋掉（2002 抓到 501000 股）
-#      → 需改「只認現股（Stock）列」並聚合整股/零股
-#   ② collect() 同樣只應看現股列
-#   ③ 每日一次 guard 應排除 dry 紀錄（dry 不占用真實執行額度）
-#   ④ accounting.place_manual dry 應回 ok=True（dry 模擬成功 ≠ 失敗）
 
 
 
@@ -64,6 +58,8 @@ def collect(sdk, acc):
 
     holdings = []
     for it in inv:
+        if "Stock" not in (it.get("order_type") or ""):
+            continue   # AI 決策只看現股庫存
         sym = it["symbol"]
         qty_total = it.get("qty_total") or 0
         if qty_total <= 0:
@@ -198,14 +194,25 @@ def execute(sdk, acc, decision, real=False):
     try:
         n = conn.execute(
             "SELECT COUNT(*) FROM orders WHERE mode='ai' AND ts LIKE ? "
-            "AND symbol=? AND is_success=1",
+            "AND symbol=? AND is_success=1 AND message NOT LIKE '%dry%'",
             (f"{datetime.now().strftime('%Y-%m-%d')}%", sym)).fetchone()[0]
     finally:
         conn.close()
     if n >= 1:
         return {"ok": False, "message": f"{sym} 今日已執行過 AI 建議（每日一次）"}
 
-    inv = {it["symbol"]: it for it in acct.inventories(sdk, acc)}
+    # 只認現股（Stock）列 — 融券/SBL/融資列是他人部位或另類持倉，不可混賣
+    inv = {}
+    for it0 in acct.inventories(sdk, acc):
+        if "Stock" not in (it0.get("order_type") or ""):
+            continue
+        cur = inv.get(it0["symbol"])
+        if cur:
+            cur["qty_whole"] += it0.get("qty_whole") or 0
+            cur["qty_odd"] += it0.get("qty_odd") or 0
+            cur["qty_total"] += it0.get("qty_total") or 0
+        else:
+            inv[it0["symbol"]] = dict(it0)
     it = inv.get(sym)
     if not it or (it.get("qty_total") or 0) <= 0:
         return {"ok": False, "message": f"{sym} 目前無庫存"}

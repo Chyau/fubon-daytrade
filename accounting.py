@@ -277,7 +277,7 @@ def place_manual(sdk, acc, symbol, side, qty, price=None, odd=False, dry=True,
                          message=f"manual {note}｜{msg or ''}", raw="")
     finally:
         conn.close()
-    return {"ok": ok if real else False, "message": f"{note}｜{msg or '已記錄'}",
+    return {"ok": True if dry else ok, "message": f"{note}｜{msg or '已記錄'}",
             "order_no": order_no, "recorded": True}
 
 
