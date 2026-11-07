@@ -1226,6 +1226,54 @@ AI_TPL = """
   </form>
 </div>
 <div class="card">
+  <h3>💼 AI 持倉建議（交易型態判斷＋賣出/加碼）</h3>
+  <p style="color:#94a3b8;font-size:12px">
+    查庫存→依振幅/趨勢/價位判斷適合型態（當沖/隔日沖/定期定額/零股存股）
+    ＋下個交易日賣出/加碼建議。執行需逐筆確認；真實送單需 PLACE_ORDER=true。</p>
+  <button onclick="loadHoldings()">🤖 生成建議</button>
+  <span id="holdmsg" style="margin-left:8px"></span>
+  <div id="holdtbl" style="margin-top:8px"></div>
+</div>
+<script>
+async function loadHoldings(){
+  var m = document.getElementById('holdmsg'), tbl = document.getElementById('holdtbl');
+  m.textContent = '分析中（查庫存+LLM，約 10~30 秒）…';
+  tbl.innerHTML = '';
+  try{
+    var r = await fetch('/api/ai/holdings', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'});
+    var j = await r.json();
+    if (j.error){ m.textContent = '✗ ' + j.error; return; }
+    m.textContent = '✓ 建議 ' + j.decisions.length + ' 檔';
+    var h = '<table><tr><th>標的</th><th>型態</th><th>型態理由</th><th>動作</th>' +
+            '<th>數量</th><th>決策理由</th><th>執行</th></tr>';
+    j.decisions.forEach(function(d, i){
+      h += '<tr><td>' + d.symbol + '</td><td><b>' + (d.style||'—') + '</b></td>' +
+           '<td style="font-size:12px">' + (d.style_reason||'') + '</td>' +
+           '<td>' + (d.action||'') + '</td><td>' + (d.qty||'—') + '</td>' +
+           '<td style="font-size:12px">' + (d.reason||'') + '</td>' +
+           '<td><button onclick="execAI(' + i + ', false)">dry</button> ' +
+           '<button onclick="execAI(' + i + ', true)">真實</button></td></tr>';
+    });
+    tbl.innerHTML = h + '</table>';
+    window._decisions = j.decisions;
+  }catch(e){ m.textContent = '✗ ' + e; }
+}
+async function execAI(i, real){
+  var d = (window._decisions||[])[i];
+  if (!d) return;
+  if (real && !confirm('真實下單：' + d.symbol + ' ' + d.action +
+      (d.qty ? ' ' + d.qty + ' 股' : '') + '？確認 PLACE_ORDER 已開啟。')) return;
+  var r = await fetch('/api/ai/holdings/execute', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({decision: d, real: real})});
+  var j = await r.json();
+  alert((j.ok ? '✓ ' : '✗ ') + j.message);
+  if (j.ok && real) setTimeout(function(){location.reload();}, 1200);
+}
+</script>
+
+<div class="card">
   <h3>📋 最新 AI 複盤</h3>
   {% if review %}
     <p style="color:#94a3b8">{{ review.created_at }}（{{ review.date }}）</p>
@@ -1412,6 +1460,33 @@ def swing_stop():
     msg = swing_mod.engine.stop()
     log.info(f"網頁停止波段引擎：{msg}")
     return redirect(url_for("swing_page"))
+
+
+# ==================== AI 持倉建議（型態判斷+賣出/加碼執行） ====================
+
+@app.route("/api/ai/holdings", methods=["POST"])
+def api_ai_holdings():
+    import ai_holdings
+    if not llm.enabled():
+        return {"error": "LLM 未設定（.env：LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）"}
+    sdk, acc = _sdk_for_account()
+    if sdk is None:
+        return {"error": "SDK 連線失敗"}
+    decisions, err = ai_holdings.evaluate(sdk, acc)
+    if err:
+        return {"error": err}
+    return {"decisions": decisions}
+
+
+@app.route("/api/ai/holdings/execute", methods=["POST"])
+def api_ai_holdings_exec():
+    import ai_holdings
+    d = request.get_json(silent=True) or {}
+    decision = d.get("decision") or {}
+    sdk, acc = _sdk_for_account()
+    if sdk is None:
+        return {"ok": False, "message": "SDK 連線失敗"}
+    return ai_holdings.execute(sdk, acc, decision, real=bool(d.get("real")))
 
 
 @app.route("/help")

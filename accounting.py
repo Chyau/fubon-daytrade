@@ -214,7 +214,7 @@ def inventories_with_buyinfo(sdk, acc):
 
 
 def place_manual(sdk, acc, symbol, side, qty, price=None, odd=False, dry=True,
-                 user_def="MANUAL"):
+                 user_def="MANUAL", mode_tag="manual"):
     """現股手動下單（整張/零股）。
     dry=True：只記錄不送單（安全預設）。真送單需 PLACE_ORDER=true。
     回傳 {"ok", "message", "order_no", "recorded"}"""
@@ -267,7 +267,7 @@ def place_manual(sdk, acc, symbol, side, qty, price=None, odd=False, dry=True,
 
     conn = tdb.connect()
     try:
-        tdb.record_order(conn, mode="manual", symbol=symbol, side=side,
+        tdb.record_order(conn, mode=mode_tag, symbol=symbol, side=side,
                          order_type="stock", quantity=qty,
                          price=str(px) if px is not None else "",
                          price_type="Limit" if px is not None else "Market",
