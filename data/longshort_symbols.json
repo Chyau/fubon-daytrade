@@ -1,63 +1,698 @@
 {
- "date": "2026/11/05",
+ "date": "2026/11/06",
  "symbols": [
   {
-   "stock_no": "1216",
-   "bias_label": "做多",
-   "bias_score": 7,
-   "close": 80.9,
+   "stock_no": "3711",
+   "bias_label": "做空",
+   "bias_score": -9,
+   "close": 527.0,
    "tags": [
-    "KD多",
-    "MACD紅",
-    "≥MA20",
-    "≥MA60",
-    "RSI70",
-    "外資連6買",
-    "主力買超"
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "外資連7賣",
+    "主力賣超",
+    "盤中-7.87%",
+    "情緒dn 19"
    ]
   },
   {
-   "stock_no": "2207",
-   "bias_label": "做多",
-   "bias_score": 5,
-   "close": 537.0,
+   "stock_no": "1303",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 239.5,
    "tags": [
     "KD空",
-    "MACD紅",
-    "≥MA20",
-    "≥MA60",
-    "RSI51",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI20超賣",
+    "外資連7賣",
+    "主力賣超",
+    "盤中-3.82%"
+   ]
+  },
+  {
+   "stock_no": "1605",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 31.45,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI16超賣",
+    "外資連4賣",
+    "主力賣超",
+    "盤中-3.53%"
+   ]
+  },
+  {
+   "stock_no": "2301",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 198.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI8超賣",
+    "外資連7賣",
+    "主力賣超",
+    "盤中-6.38%"
+   ]
+  },
+  {
+   "stock_no": "2303",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 92.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI11超賣",
+    "外資連3賣",
+    "主力賣超",
+    "盤中-6.5%"
+   ]
+  },
+  {
+   "stock_no": "2308",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 1055.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI6超賣",
+    "外資連7賣",
+    "主力賣超",
+    "盤中-6.64%"
+   ]
+  },
+  {
+   "stock_no": "2327",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 374.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI9超賣",
+    "外資連7賣",
+    "主力賣超",
+    "盤中-7.54%"
+   ]
+  },
+  {
+   "stock_no": "2345",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 1280.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI5超賣",
+    "外資連3賣",
+    "主力賣超",
+    "盤中-7.25%"
+   ]
+  },
+  {
+   "stock_no": "2382",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 290.5,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI11超賣",
+    "外資連4賣",
+    "主力賣超",
+    "盤中-3.17%"
+   ]
+  },
+  {
+   "stock_no": "2454",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 3390.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI16超賣",
+    "外資連21賣",
+    "主力賣超",
+    "盤中-2.02%"
+   ]
+  },
+  {
+   "stock_no": "3231",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 160.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI11超賣",
+    "外資連7賣",
+    "主力賣超",
+    "盤中-5.04%"
+   ]
+  },
+  {
+   "stock_no": "3665",
+   "bias_label": "做空",
+   "bias_score": -8,
+   "close": 1325.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI5超賣",
+    "外資連4賣",
+    "主力賣超",
+    "盤中-9.86%"
+   ]
+  },
+  {
+   "stock_no": "1301",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 62.7,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "主力賣超",
+    "盤中-3.69%"
+   ]
+  },
+  {
+   "stock_no": "1590",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 1010.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI16超賣",
+    "主力賣超",
+    "盤中-3.81%"
+   ]
+  },
+  {
+   "stock_no": "2002",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 18.55,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "外資連2賣",
+    "主力買超",
+    "盤中-2.11%",
+    "情緒dn 18"
+   ]
+  },
+  {
+   "stock_no": "2330",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 2135.0,
+   "tags": [
+    "KD多",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI5超賣",
+    "外資連21賣",
+    "主力賣超",
+    "盤中-4.69%",
+    "情緒dn 16"
+   ]
+  },
+  {
+   "stock_no": "2357",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 859.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI17超賣",
+    "外資連4賣",
+    "主力賣超"
+   ]
+  },
+  {
+   "stock_no": "3653",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 5225.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI22",
+    "外資連3賣",
+    "主力賣超",
+    "盤中-9.99%"
+   ]
+  },
+  {
+   "stock_no": "4938",
+   "bias_label": "做空",
+   "bias_score": -7,
+   "close": 92.9,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "外資連2賣",
+    "主力買超",
+    "盤中-4.42%",
+    "情緒dn 18"
+   ]
+  },
+  {
+   "stock_no": "2317",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 224.5,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI17超賣",
+    "外資連3賣",
+    "主力買超",
+    "盤中-4.47%"
+   ]
+  },
+  {
+   "stock_no": "2360",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 1205.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI5超賣",
     "外資連5買",
-    "主力買超"
+    "主力賣超",
+    "盤中-9.74%"
+   ]
+  },
+  {
+   "stock_no": "2379",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 708.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI15超賣",
+    "外資連5賣",
+    "主力買超",
+    "盤中-1.67%"
+   ]
+  },
+  {
+   "stock_no": "2882",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 106.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI18超賣",
+    "外資連6賣",
+    "主力買超",
+    "盤中-5.36%"
+   ]
+  },
+  {
+   "stock_no": "2883",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 33.65,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI10超賣",
+    "外資連7賣",
+    "主力買超",
+    "盤中-2.04%"
+   ]
+  },
+  {
+   "stock_no": "2885",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 66.9,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "外資連6賣",
+    "主力買超",
+    "盤中-3.18%"
+   ]
+  },
+  {
+   "stock_no": "2887",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 38.45,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI10超賣",
+    "外資連6賣",
+    "主力買超",
+    "盤中-4.11%"
+   ]
+  },
+  {
+   "stock_no": "2890",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 41.7,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI12超賣",
+    "外資連6賣",
+    "主力買超",
+    "盤中-2.8%"
+   ]
+  },
+  {
+   "stock_no": "3034",
+   "bias_label": "做空",
+   "bias_score": -6,
+   "close": 495.5,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI10超賣",
+    "外資連6賣",
+    "主力買超",
+    "盤中-2.84%"
+   ]
+  },
+  {
+   "stock_no": "1326",
+   "bias_label": "做空",
+   "bias_score": -5,
+   "close": 62.7,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI18超賣",
+    "主力買超",
+    "盤中-3.54%"
+   ]
+  },
+  {
+   "stock_no": "2395",
+   "bias_label": "做空",
+   "bias_score": -5,
+   "close": 552.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI10超賣",
+    "主力買超",
+    "盤中-7.38%"
+   ]
+  },
+  {
+   "stock_no": "2408",
+   "bias_label": "做空",
+   "bias_score": -5,
+   "close": 343.5,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "主力買超",
+    "盤中-4.58%"
+   ]
+  },
+  {
+   "stock_no": "2609",
+   "bias_label": "做空",
+   "bias_score": -5,
+   "close": 57.1,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI17超賣",
+    "主力買超",
+    "盤中-4.83%"
+   ]
+  },
+  {
+   "stock_no": "2881",
+   "bias_label": "做空",
+   "bias_score": -5,
+   "close": 148.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI19超賣",
+    "主力買超",
+    "盤中-4.82%"
+   ]
+  },
+  {
+   "stock_no": "3008",
+   "bias_label": "做空",
+   "bias_score": -5,
+   "close": 4480.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI14超賣",
+    "外資連2買",
+    "主力賣超"
+   ]
+  },
+  {
+   "stock_no": "5876",
+   "bias_label": "做空",
+   "bias_score": -4,
+   "close": 51.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI20超賣",
+    "外資連2賣",
+    "主力買超",
+    "盤中-1.35%"
+   ]
+  },
+  {
+   "stock_no": "2603",
+   "bias_label": "偏空",
+   "bias_score": -3,
+   "close": 246.5,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI24",
+    "外資連2賣",
+    "主力買超",
+    "盤中-4.83%"
+   ]
+  },
+  {
+   "stock_no": "2880",
+   "bias_label": "偏空",
+   "bias_score": -3,
+   "close": 48.95,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI42",
+    "外資連6賣",
+    "主力買超",
+    "盤中-1.31%"
+   ]
+  },
+  {
+   "stock_no": "2884",
+   "bias_label": "偏空",
+   "bias_score": -3,
+   "close": 47.0,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI30",
+    "外資連2賣",
+    "主力買超",
+    "盤中-1.98%"
+   ]
+  },
+  {
+   "stock_no": "5871",
+   "bias_label": "偏空",
+   "bias_score": -3,
+   "close": 102.0,
+   "tags": [
+    "KD多",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI18超賣",
+    "主力買超",
+    "盤中-2.39%"
+   ]
+  },
+  {
+   "stock_no": "6505",
+   "bias_label": "偏空",
+   "bias_score": -3,
+   "close": 85.7,
+   "tags": [
+    "KD多",
+    "MACD綠",
+    "<MA20",
+    "<MA60",
+    "RSI22",
+    "外資連4買",
+    "主力賣超",
+    "盤中-2.5%"
+   ]
+  },
+  {
+   "stock_no": "1101",
+   "bias_label": "偏空",
+   "bias_score": -2,
+   "close": 26.75,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI24",
+    "主力買超",
+    "盤中-1.65%"
+   ]
+  },
+  {
+   "stock_no": "1216",
+   "bias_label": "偏空",
+   "bias_score": -2,
+   "close": 76.8,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI22",
+    "主力買超",
+    "盤中-5.07%"
+   ]
+  },
+  {
+   "stock_no": "2892",
+   "bias_label": "偏空",
+   "bias_score": -2,
+   "close": 40.95,
+   "tags": [
+    "KD空",
+    "MACD綠",
+    "<MA20",
+    "≥MA60",
+    "RSI26",
+    "主力買超",
+    "盤中-3.08%"
    ]
   },
   {
    "stock_no": "5880",
-   "bias_label": "做多",
-   "bias_score": 5,
-   "close": 28.5,
+   "bias_label": "偏空",
+   "bias_score": -2,
+   "close": 27.9,
    "tags": [
     "KD空",
-    "MACD紅",
-    "≥MA20",
-    "≥MA60",
-    "RSI51",
-    "外資連6買",
-    "主力買超"
-   ]
-  },
-  {
-   "stock_no": "9904",
-   "bias_label": "做多",
-   "bias_score": 4,
-   "close": 26.0,
-   "tags": [
-    "KD多",
     "MACD綠",
-    "≥MA20",
+    "<MA20",
     "≥MA60",
-    "RSI57",
-    "主力買超"
+    "RSI31",
+    "主力買超",
+    "盤中-2.11%"
    ]
   }
  ]
