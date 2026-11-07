@@ -1270,7 +1270,7 @@ def api_ai_chat():
     rev = ai_review.latest_review()
     system = ("你是台股當沖系統的 AI 助手。只能依據下方系統數據回答；"
               "數據沒有的就明說不知道。繁體中文，簡潔（≤200字）。")
-    user = (f"【系統數據】\n{json.dumps(digest, ensure_ascii=False, default=str)[:6000]}\n"
+    user = (f"【系統數據】\n{_json.dumps(digest, ensure_ascii=False, default=str)[:6000]}\n"
             f"【最新複盤】{(rev or {}).get('content', '')[:800]}\n【問題】{q}")
     text, lerr = llm.chat([{"role": "system", "content": system},
                            {"role": "user", "content": user}], max_tokens=600)

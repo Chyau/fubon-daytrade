@@ -60,10 +60,12 @@ def bank_remain(sdk, acc):
         return {"currency": "TWD", "balance": 0.0,
                 "note": "測試環境不支援銀行餘額查詢"}
     try:
-        r = fo_dig(sdk.accounting.bank_remain(acc))
-        d = r.get("data") or {}
-        return {"currency": d.get("currency") or "TWD",
-                "balance": _f(d.get("balance"))}
+        res = sdk.accounting.bank_remain(acc)
+        d = getattr(res, "data", None)
+        if isinstance(d, list):
+            d = d[0] if d else None
+        return {"currency": getattr(d, "currency", None) or "TWD",
+                "balance": _f(getattr(d, "balance", 0))}
     except BaseException as e:
         log.warning(f"bank_remain 失敗：{str(e)[:120]} → 重置 SDK session")
         try:

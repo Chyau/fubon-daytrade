@@ -19,6 +19,27 @@ ensure_utf8_stdout()
 log = get_logger("llm")
 
 
+def _load_dotenv():
+    """讀專案 .env（不覆蓋已存在環境變數）— 讓 ai_review.py 等獨立進入點也能取得設定"""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    try:
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k and v and k not in os.environ:
+                os.environ[k] = v
+    except Exception as e:
+        log.debug(f".env 載入略過：{e}")
+
+
+_load_dotenv()
+
+
 def config():
     return {
         "base_url": (os.environ.get("LLM_BASE_URL") or "").rstrip("/"),
