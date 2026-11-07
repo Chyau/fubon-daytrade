@@ -128,6 +128,7 @@ BASE = """<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8">
   <a href="{{ url_for('backtest_page') }}">⏱ 回測</a>
   <a href="{{ url_for('account_page') }}">💼 帳務</a>
   <a href="{{ url_for('swing_page') }}">📈 波段/定投</a>
+  <a href="{{ url_for('style_page') }}">🎯 型態配置</a>
   <a href="{{ url_for('ai_page') }}">🤖 AI 助手</a>
   <a href="{{ url_for('help_page') }}">📖 手冊</a>
 </div><div class="wrap">{{ content|safe }}</div>
@@ -1487,6 +1488,58 @@ def api_ai_holdings_exec():
     if sdk is None:
         return {"ok": False, "message": "SDK 連線失敗"}
     return ai_holdings.execute(sdk, acc, decision, real=bool(d.get("real")))
+
+
+# ==================== 型態配置（當沖/隔日沖/定期定額/零股存股） ====================
+
+@app.route("/style")
+def style_page():
+    data = {}
+    try:
+        data = _json.load(open(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "style_alloc.json"),
+            encoding="utf-8"))
+    except Exception:
+        pass
+    results = data.get("results", [])
+    sel = request.args.get("style") or ""
+    show = [r for r in results if not sel or r.get("best") == sel]
+    return page(STYLE_TPL, generated=data.get("generated", ""),
+                ls_date=data.get("ls_date"), results=show,
+                n_all=len(results), sel=sel)
+
+
+STYLE_TPL = """
+<h1>🎯 型態配置
+  <span class="bdg b">{{ n_all }} 檔</span>
+  <span class="muted" style="font-size:.8rem">{{ generated }}｜多空清單基準 {{ ls_date }}</span></h1>
+<div class="card">
+  <p style="font-size:13px;color:#94a3b8;margin:0 0 8px">
+    依標的特性（振幅/價位/60K趨勢/流動性/成本門檻）＋引擎實測當沖歷史，
+    統籌配對最適交易型態。<a href="/style">全部</a>｜
+    <a href="/style?style=當沖">當沖</a>｜<a href="/style?style=隔日沖">隔日沖</a>｜
+    <a href="/style?style=定期定額">定期定額</a>｜<a href="/style?style=零股存股">零股存股</a>
+  </p>
+  <table><tr><th>標的</th><th>最適型態</th><th>分數</th><th>日均振幅</th><th>股價</th>
+  <th>整張門檻</th><th>當沖實測</th><th>主要理由</th></tr>
+  {% for r in show %}<tr><td><b>{{ r.symbol }}</b></td>
+  <td><span class="bdg {{ 'g' if r.best=='當沖' else ('b' if r.best=='隔日沖' else 's') }}">{{ r.best }}</span></td>
+  <td>{{ r.score }}</td><td>{{ r.feat.amp }}%</td><td>{{ r.feat.price }}</td>
+  <td>{{ '{:.1f} 萬'.format(r.feat.lot_value/10000) }}</td>
+  <td>{% if r.dt.n %}{{ '{:.0%}'.format(r.dt.win_rate) }} (n{{ r.dt.n }}){% else %}—{% endif %}</td>
+  <td style="font-size:12px">{{ r.reasons[0] if r.reasons }}</td></tr>
+  {% else %}<tr><td colspan="8">（尚無資料 — 執行 python style_allocator.py）</td></tr>{% endfor %}</table>
+</div>
+<div class="card">
+  <h3>型態說明</h3>
+  <p style="font-size:13px">🔨 <b>當沖</b>：振幅≥2.5%＋流動性足＋60K 方向明確＋引擎實測勝率≥50% →
+  日內進出（停損/13:20 出場）  <span class="bdg o">⚠ 富邦 API 不開放現股當沖（委託別錯誤）→ 當沖型態僅供模擬研究，實際執行需券商下單軟體手動操作</span><br>
+  🌅 <b>隔日沖</b>：昨收漲停→次日跳空≤1% 買進、停損跌回漲停價、持有 ≤3 日
+  （實證 n=180 勝率 57% avg +6.71%）<br>
+  💰 <b>定期定額</b>：振幅<1.5%＋流動性高＋整張門檻低 → 固定金額累積<br>
+  📥 <b>零股存股</b>：整張門檻 ≥15 萬或穩定型 → 零股小額參與</p>
+</div>
+"""
 
 
 @app.route("/help")
